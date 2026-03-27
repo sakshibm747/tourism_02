@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Karnataka Tourism Booking</title>
+    <!-- Google Fonts: Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    {% block head_extra %}{% endblock %}
+</head>
+
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="/" class="brand-logo">Namma<span>Karnataka</span></a>
+            <ul class="nav-links">
+                <li><a href="/search?destination="><i class="fas fa-percent"></i> Offers</a></li>
+                <li><a href="/reviews"><i class="fas fa-pen-nib"></i> Travel Stories</a></li>
+                {% if logged_in %}
+                {% if user_role == 'user' %}
+                <li><a href="/profile"><i class="fas fa-suitcase-rolling"></i> My Trips</a></li>
+                {% elif user_role == 'agency' %}
+                <li><a href="/agency"><i class="fas fa-tachometer-alt"></i> Dashboard</a></li>
+                <li class="notification-nav-item">
+                    <button type="button" id="agency-notification-bell" class="notification-bell" aria-label="Notifications" data-poll-ms="{{ notification_poll_ms }}">
+                        <i class="fas fa-bell"></i>
+                        <span id="agency-notification-count" class="notification-badge" style="display:none;">0</span>
+                    </button>
+                    <div id="agency-notification-dropdown" class="notification-dropdown" style="display:none;">
+                        <div class="notification-header">
+                            <strong>Booking Alerts</strong>
+                            <button type="button" id="agency-mark-all-read" class="notification-link-btn">Mark all read</button>
+                        </div>
+                        <div id="agency-notification-list" class="notification-list">
+                            <div class="notification-empty">No alerts yet.</div>
+                        </div>
+                    </div>
+                </li>
+                {% endif %}
+                <li><a href="/logout" class="login-btn"><i class="fas fa-sign-out-alt"></i> {{ user_name.split(' ')[0]
+                        }} (Logout)</a></li>
+                {% else %}
+                <li><a href="/profile"><i class="fas fa-suitcase-rolling"></i> My Trips</a></li>
+                <li><a href="/login" class="login-btn"><i class="fas fa-user-circle"></i> Login / Signup</a></li>
+                {% endif %}
+            </ul>
+        </div>
+    </nav>
+
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+
+    <a href="{{ whatsapp_chat_link }}" class="global-whatsapp-btn" target="_blank" rel="noopener" aria-label="Chat on WhatsApp">
+        <i class="fab fa-whatsapp"></i>
+        <span>WhatsApp Help</span>
+    </a>
+
+    <footer class="footer">
+        <div class="footer-container">
+            <div class="footer-section">
+                <h3>NammaKarnataka</h3>
+                <p>Your gateway to the incredible state of Karnataka.</p>
+            </div>
+            <div class="footer-section">
+                <h3>Quick Links</h3>
+                <ul>
+                    <li><a href="#">About Us</a></li>
+                    <li><a href="#">Contact</a></li>
+                    <li><a href="#">Partner with us</a></li>
+                </ul>
+            </div>
+            <div class="footer-section">
+                <h3>Legal</h3>
+                <ul>
+                    <li><a href="#">Terms & Conditions</a></li>
+                    <li><a href="#">Privacy Policy</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>&copy; 2026 NammaKarnataka Tourism. All rights reserved.</p>
+        </div>
+    </footer>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+
+</html>

@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- Blog Hero -->
+<section class="blog-hero">
+    <div class="blog-hero-overlay"></div>
+    <div class="blog-hero-content">
+        <span class="blog-hero-badge"><i class="fas fa-pen-nib"></i> Travel Stories</span>
+        <h1>Real Traveler Experiences</h1>
+        <p>Authentic stories, tips, and photo journals from fellow travelers who explored Karnataka</p>
+    </div>
+</section>
+
+<!-- Stats Bar -->
+{% if reviews %}
+<section class="blog-stats-bar">
+    <div class="blog-stats-container">
+        <div class="blog-stat">
+            <strong>{{ reviews|length }}</strong>
+            <span>Stories</span>
+        </div>
+        <div class="blog-stat">
+            <strong>{{ (reviews | map(attribute='rating') | sum / reviews|length) | round(1) }}</strong>
+            <span>Avg Rating</span>
+        </div>
+        <div class="blog-stat">
+            <strong>{{ reviews | map(attribute='package_title') | unique | list | length }}</strong>
+            <span>Destinations</span>
+        </div>
+    </div>
+</section>
+{% endif %}
+
+<!-- Reviews Grid -->
+<section class="blog-section">
+    <div class="blog-container">
+        {% if reviews %}
+        <div class="blog-grid">
+            {% for review in reviews %}
+            <article class="blog-card" onclick="window.location.href='/package/{{ review.package_id }}'">
+                <div class="blog-card-image">
+                    {% if review.photos and review.photos|length > 0 %}
+                    <img src="{{ review.photos[0] }}" alt="{{ review.title }}" loading="lazy">
+                    {% elif review.package_image %}
+                    <img src="{{ review.package_image }}" alt="{{ review.package_title }}" loading="lazy">
+                    {% else %}
+                    <div class="blog-card-placeholder"><i class="fas fa-mountain"></i></div>
+                    {% endif %}
+                    <div class="blog-card-rating">
+                        {% for i in range(review.rating) %}
+                        <i class="fas fa-star"></i>
+                        {% endfor %}
+                        {% for i in range(5 - review.rating) %}
+                        <i class="far fa-star"></i>
+                        {% endfor %}
+                    </div>
+                    {% if review.photos and review.photos|length > 1 %}
+                    <span class="blog-card-photo-count"><i class="fas fa-images"></i> {{ review.photos|length }}</span>
+                    {% endif %}
+                </div>
+                <div class="blog-card-body">
+                    <div class="blog-card-meta">
+                        <span class="blog-card-destination"><i class="fas fa-map-marker-alt"></i> {{ review.package_title }}</span>
+                        {% if review.trip_type %}
+                        <span class="blog-card-trip-type">{{ review.trip_type }}</span>
+                        {% endif %}
+                    </div>
+                    <h3 class="blog-card-title">{{ review.title }}</h3>
+                    <p class="blog-card-excerpt">{{ review.content[:180] }}{% if review.content|length > 180 %}...{% endif %}</p>
+                    <div class="blog-card-footer">
+                        <div class="blog-card-author">
+                            <div class="blog-card-avatar">{{ review.user_name[0] | upper }}</div>
+                            <div>
+                                <span class="author-name">{{ review.user_name }}</span>
+                                <span class="author-date">{{ review.date }}</span>
+                            </div>
+                        </div>
+                        <span class="blog-card-read-more">Read more <i class="fas fa-arrow-right"></i></span>
+                    </div>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="blog-empty">
+            <i class="fas fa-pen-fancy"></i>
+            <h3>No travel stories yet</h3>
+            <p>Be the first to share your Karnataka travel experience! Visit a package and write a review.</p>
+            <a href="/" class="blog-empty-btn">Explore Packages</a>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

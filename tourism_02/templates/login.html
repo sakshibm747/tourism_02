@@ -1,0 +1,272 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="portal-container"
+    style="max-width: 440px; margin: 60px auto; padding: 35px; background: var(--glass-bg); backdrop-filter: var(--glass-blur); border-radius: var(--border-radius); box-shadow: 0 10px 30px rgba(0,0,0,0.1); border: var(--glass-border);">
+
+    <!-- Login / Register Toggle -->
+    <div style="display: flex; margin-bottom: 25px; background: #f1f5f9; border-radius: 30px; padding: 4px;">
+        <button id="mode-login" onclick="switchMode('login')"
+            style="flex: 1; padding: 10px; border: none; border-radius: 26px; font-weight: 700; font-size: 14px; cursor: pointer; background: linear-gradient(93deg, #53b2fe, #065af3); color: white; transition: all 0.3s;">Login</button>
+        <button id="mode-register" onclick="switchMode('register')"
+            style="flex: 1; padding: 10px; border: none; border-radius: 26px; font-weight: 700; font-size: 14px; cursor: pointer; background: none; color: var(--text-light); transition: all 0.3s;">Register</button>
+    </div>
+
+    <h2 id="form-title" style="text-align: center; margin-bottom: 20px; font-size: 24px; font-weight: 800;">Welcome Back
+    </h2>
+
+    <!-- Role Tabs -->
+    <div class="tabs" style="display: flex; margin-bottom: 20px; border-bottom: 2px solid #eee;">
+        <button id="tab-user" class="tab-btn active" onclick="switchTab('user')"
+            style="flex: 1; padding: 10px; border: none; background: none; font-weight: 700; color: var(--primary-color); border-bottom: 2px solid var(--primary-color); cursor: pointer; transition: all 0.3s;">
+            <i class="fas fa-user"></i> Customer
+        </button>
+        <button id="tab-agency" class="tab-btn" onclick="switchTab('agency')"
+            style="flex: 1; padding: 10px; border: none; background: none; font-weight: 600; color: var(--text-light); border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.3s;">
+            <i class="fas fa-building"></i> Agency
+        </button>
+    </div>
+
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    {% if category == 'error' %}
+    <div
+        style="padding: 10px; margin-bottom: 15px; border-radius: 6px; font-size: 13px; text-align: center; background: #ffe6e6; color: #d32f2f;">
+        <i class="fas fa-exclamation-circle"></i> {{ message }}
+    </div>
+    {% else %}
+    <div
+        style="padding: 10px; margin-bottom: 15px; border-radius: 6px; font-size: 13px; text-align: center; background: #eefbee; color: #00a12e;">
+        <i class="fas fa-check-circle"></i> {{ message }}
+    </div>
+    {% endif %}
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+
+    <!-- LOGIN FORM -->
+    <form id="login-form" action="/login" method="POST" style="display: flex; flex-direction: column; gap: 15px;">
+        <input type="hidden" name="role" id="login-role-input" value="user">
+
+        <div>
+            <label style="font-size: 13px; font-weight: 600; color: var(--text-dark);">Email Address</label>
+            <input type="email" name="email" placeholder="Enter your email" required
+                style="width: 100%; padding: 12px; margin-top: 5px; border: 1px solid #ccc; border-radius: 8px; outline: none; transition: border 0.3s;">
+        </div>
+        <div>
+            <label style="font-size: 13px; font-weight: 600; color: var(--text-dark);">Password</label>
+            <input type="password" name="password" placeholder="Enter your password" required
+                style="width: 100%; padding: 12px; margin-top: 5px; border: 1px solid #ccc; border-radius: 8px; outline: none; transition: border 0.3s;">
+        </div>
+
+        <button type="submit"
+            style="background: linear-gradient(93deg, #53b2fe, #065af3); color: white; border: none; padding: 15px; border-radius: 30px; font-weight: 700; font-size: 16px; cursor: pointer; box-shadow: 0 4px 15px rgba(6, 90, 243, 0.3); transition: transform 0.3s; margin-top: 5px;"
+            onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
+            <i class="fas fa-sign-in-alt"></i> LOGIN
+        </button>
+
+        <!-- Divider -->
+        <div style="display: flex; align-items: center; gap: 12px; margin: 5px 0;">
+            <div style="flex: 1; height: 1px; background: #ddd;"></div>
+            <span style="font-size: 12px; color: #999; font-weight: 600;">OR</span>
+            <div style="flex: 1; height: 1px; background: #ddd;"></div>
+        </div>
+
+        <!-- Google Sign-In Button -->
+        <button type="button" onclick="signInWithGoogle()"
+            style="display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; padding: 13px; border: 1px solid #ddd; border-radius: 30px; background: white; font-weight: 600; font-size: 15px; cursor: pointer; color: #333; transition: all 0.3s; box-shadow: 0 1px 3px rgba(0,0,0,0.08);"
+            onmouseover="this.style.boxShadow='0 3px 12px rgba(0,0,0,0.15)';this.style.borderColor='#bbb'"
+            onmouseout="this.style.boxShadow='0 1px 3px rgba(0,0,0,0.08)';this.style.borderColor='#ddd'">
+            <svg width="20" height="20" viewBox="0 0 48 48">
+                <path fill="#EA4335"
+                    d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+                <path fill="#4285F4"
+                    d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+                <path fill="#FBBC05"
+                    d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+                <path fill="#34A853"
+                    d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+            </svg>
+            Sign in with Google
+        </button>
+    </form>
+
+    <!-- REGISTER FORM (hidden by default) -->
+    <form id="register-form" action="/register" method="POST" style="display: none; flex-direction: column; gap: 15px;">
+        <input type="hidden" name="role" id="register-role-input" value="user">
+
+        <div>
+            <label style="font-size: 13px; font-weight: 600; color: var(--text-dark);">Full Name</label>
+            <input type="text" name="name" placeholder="Enter your full name" required
+                style="width: 100%; padding: 12px; margin-top: 5px; border: 1px solid #ccc; border-radius: 8px; outline: none; transition: border 0.3s;">
+        </div>
+        <div>
+            <label style="font-size: 13px; font-weight: 600; color: var(--text-dark);">Email Address</label>
+            <input type="email" name="email" placeholder="Enter your email" required
+                style="width: 100%; padding: 12px; margin-top: 5px; border: 1px solid #ccc; border-radius: 8px; outline: none; transition: border 0.3s;">
+        </div>
+        <div>
+            <label style="font-size: 13px; font-weight: 600; color: var(--text-dark);">Password <span
+                    style="color:#999; font-weight:400;">(min 6 characters)</span></label>
+            <input type="password" name="password" placeholder="Create a password" required minlength="6"
+                style="width: 100%; padding: 12px; margin-top: 5px; border: 1px solid #ccc; border-radius: 8px; outline: none; transition: border 0.3s;">
+        </div>
+
+        <button type="submit"
+            style="background: linear-gradient(93deg, #00a12e, #00c853); color: white; border: none; padding: 15px; border-radius: 30px; font-weight: 700; font-size: 16px; cursor: pointer; box-shadow: 0 4px 15px rgba(0, 161, 46, 0.3); transition: transform 0.3s; margin-top: 5px;"
+            onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
+            <i class="fas fa-user-plus"></i> CREATE ACCOUNT
+        </button>
+
+        <!-- Divider -->
+        <div style="display: flex; align-items: center; gap: 12px; margin: 5px 0;">
+            <div style="flex: 1; height: 1px; background: #ddd;"></div>
+            <span style="font-size: 12px; color: #999; font-weight: 600;">OR</span>
+            <div style="flex: 1; height: 1px; background: #ddd;"></div>
+        </div>
+
+        <!-- Google Sign-In Button -->
+        <button type="button" onclick="signInWithGoogle()"
+            style="display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; padding: 13px; border: 1px solid #ddd; border-radius: 30px; background: white; font-weight: 600; font-size: 15px; cursor: pointer; color: #333; transition: all 0.3s; box-shadow: 0 1px 3px rgba(0,0,0,0.08);"
+            onmouseover="this.style.boxShadow='0 3px 12px rgba(0,0,0,0.15)';this.style.borderColor='#bbb'"
+            onmouseout="this.style.boxShadow='0 1px 3px rgba(0,0,0,0.08)';this.style.borderColor='#ddd'">
+            <svg width="20" height="20" viewBox="0 0 48 48">
+                <path fill="#EA4335"
+                    d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+                <path fill="#4285F4"
+                    d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+                <path fill="#FBBC05"
+                    d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+                <path fill="#34A853"
+                    d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+            </svg>
+            Sign in with Google
+        </button>
+    </form>
+
+    <p id="toggle-text" style="text-align: center; margin-top: 20px; font-size: 14px; color: var(--text-light);">
+        Don't have an account? <a href="#" onclick="switchMode('register'); return false;"
+            style="color: var(--primary-color); font-weight: 600;">Sign up</a>
+    </p>
+</div>
+
+<script>
+    var currentMode = '{{ "register" if show_register else "login" }}';
+    var currentRole = 'user';
+
+    function switchMode(mode) {
+        currentMode = mode;
+        var loginForm = document.getElementById('login-form');
+        var registerForm = document.getElementById('register-form');
+        var loginBtn = document.getElementById('mode-login');
+        var registerBtn = document.getElementById('mode-register');
+        var title = document.getElementById('form-title');
+        var toggleText = document.getElementById('toggle-text');
+
+        if (mode === 'login') {
+            loginForm.style.display = 'flex';
+            registerForm.style.display = 'none';
+            loginBtn.style.background = 'linear-gradient(93deg, #53b2fe, #065af3)';
+            loginBtn.style.color = 'white';
+            registerBtn.style.background = 'none';
+            registerBtn.style.color = 'var(--text-light)';
+            title.textContent = 'Welcome Back';
+            toggleText.innerHTML = 'Don\'t have an account? <a href="#" onclick="switchMode(\'register\'); return false;" style="color: var(--primary-color); font-weight: 600;">Sign up</a>';
+        } else {
+            loginForm.style.display = 'none';
+            registerForm.style.display = 'flex';
+            registerBtn.style.background = 'linear-gradient(93deg, #00a12e, #00c853)';
+            registerBtn.style.color = 'white';
+            loginBtn.style.background = 'none';
+            loginBtn.style.color = 'var(--text-light)';
+            title.textContent = 'Create Account';
+            toggleText.innerHTML = 'Already have an account? <a href="#" onclick="switchMode(\'login\'); return false;" style="color: var(--primary-color); font-weight: 600;">Login</a>';
+        }
+    }
+
+    function switchTab(role) {
+        currentRole = role;
+        var userTab = document.getElementById('tab-user');
+        var agencyTab = document.getElementById('tab-agency');
+
+        document.getElementById('login-role-input').value = role;
+        document.getElementById('register-role-input').value = role;
+
+        if (role === 'user') {
+            userTab.style.color = 'var(--primary-color)';
+            userTab.style.borderBottomColor = 'var(--primary-color)';
+            userTab.style.fontWeight = '700';
+            agencyTab.style.color = 'var(--text-light)';
+            agencyTab.style.borderBottomColor = 'transparent';
+            agencyTab.style.fontWeight = '600';
+        } else {
+            agencyTab.style.color = 'var(--primary-color)';
+            agencyTab.style.borderBottomColor = 'var(--primary-color)';
+            agencyTab.style.fontWeight = '700';
+            userTab.style.color = 'var(--text-light)';
+            userTab.style.borderBottomColor = 'transparent';
+            userTab.style.fontWeight = '600';
+        }
+    }
+
+    // Initialize based on server-side flag
+    window.onload = function () {
+        if (currentMode === 'register') {
+            switchMode('register');
+        }
+    };
+</script>
+
+<!-- Firebase Auth SDK -->
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+<script>
+    // Initialize Firebase
+    var firebaseConfig = {{ firebase_web_config | tojson | safe }};
+    firebase.initializeApp(firebaseConfig);
+
+    function signInWithGoogle() {
+        var provider = new firebase.auth.GoogleAuthProvider();
+        firebase.auth().signInWithPopup(provider)
+            .then(function (result) {
+                var user = result.user;
+                // Force refresh to get a fresh token
+                return user.getIdToken(true).then(function (idToken) {
+                    return { idToken: idToken, user: user };
+                });
+            })
+            .then(function (bundle) {
+                var user = bundle.user;
+                // Send token + user profile + role to backend
+                return fetch('/auth/google', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        idToken: bundle.idToken,
+                        role: currentRole,
+                        uid: user.uid,
+                        email: user.email,
+                        name: user.displayName || user.email,
+                        photo: user.photoURL || ''
+                    })
+                });
+            })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (data.success) {
+                    window.location.href = data.redirect;
+                } else {
+                    alert(data.error || 'Login failed. Please try again.');
+                }
+            })
+            .catch(function (error) {
+                console.error('Google sign-in error:', error);
+                if (error.code !== 'auth/popup-closed-by-user') {
+                    alert('Google sign-in failed: ' + error.message);
+                }
+            });
+    }
+</script>
+{% endblock %}

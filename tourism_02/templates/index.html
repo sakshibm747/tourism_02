@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- Hero Section -->
+<section class="hero-section">
+    <div class="hero-overlay"></div>
+    <div class="hero-content">
+        <h1>Discover the Wonders of Karnataka</h1>
+        <p>From heritage ruins to misty coffee estates, find your perfect getaway.</p>
+
+        <!-- Hero Search Matrix -->
+        <div class="search-matrix">
+            <form class="search-form" action="/search" method="GET">
+                <div class="search-input-group">
+                    <label>From</label>
+                    <input type="text" placeholder="Enter City (e.g. Bengaluru)" name="origin">
+                </div>
+                <div class="search-separator"><i class="fas fa-exchange-alt"></i></div>
+                <div class="search-input-group">
+                    <label>To</label>
+                    <input type="text" placeholder="Region or Vibe (e.g. Hill Stations)" name="destination">
+                </div>
+                <div class="search-input-group">
+                    <label>Departure</label>
+                    <input type="date" name="departure">
+                </div>
+                <div class="search-input-group">
+                    <label>Return</label>
+                    <input type="date" name="return">
+                </div>
+                <div class="search-input-group">
+                    <label>Travelers</label>
+                    <select name="travelers">
+                        <option value="1">1 Person</option>
+                        <option value="2" selected>2 Persons</option>
+                        <option value="3">3 Persons</option>
+                        <option value="4">4+ Persons</option>
+                    </select>
+                </div>
+                <button type="submit" class="search-btn">SEARCH</button>
+            </form>
+        </div>
+    </div>
+</section>
+
+<!-- Trust Signals -->
+<section class="trust-signals">
+    <div class="trust-container">
+        <div class="trust-item"><i class="fas fa-shield-alt"></i> 100% Verified Agencies</div>
+        <div class="trust-item"><i class="fab fa-whatsapp"></i> Instant WhatsApp Updates</div>
+        <div class="trust-item"><i class="fas fa-rupee-sign"></i> Secure UPI Payments</div>
+    </div>
+</section>
+
+<!-- Dynamic Deal Carousels -->
+<section class="deals-section">
+    <h2>Trending in Karnataka</h2>
+    <div class="carousel-container">
+        <button class="carousel-btn prev-btn"><i class="fas fa-chevron-left"></i></button>
+        <div class="carousel-track" id="dynamic-packages-container">
+            <!-- Deal Cards will be injected here via JavaScript API call -->
+            <div style="padding: 20px; color: #777;">Loading packages...</div>
+        </div>
+        <button class="carousel-btn next-btn"><i class="fas fa-chevron-right"></i></button>
+    </div>
+</section>
+
+<!-- Travel Stories CTA -->
+<section style="max-width:1200px;margin:0 auto 50px;padding:0 20px;">
+    <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);border-radius:20px;padding:50px 40px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:20px;">
+        <div>
+            <h2 style="color:#fff;font-size:26px;margin-bottom:8px;"><i class="fas fa-pen-nib" style="color:#f59e0b;margin-right:10px;"></i>Real Traveler Stories</h2>
+            <p style="color:rgba(255,255,255,0.7);font-size:15px;max-width:500px;">Read authentic reviews and photo stories from fellow travelers who explored Karnataka.</p>
+        </div>
+        <a href="/reviews" style="background:linear-gradient(135deg,#f59e0b,#f97316);color:#fff;padding:14px 32px;border-radius:25px;font-weight:700;font-size:15px;transition:transform 0.2s ease;">Browse Stories <i class="fas fa-arrow-right" style="margin-left:8px;"></i></a>
+    </div>
+</section>
+{% endblock %}

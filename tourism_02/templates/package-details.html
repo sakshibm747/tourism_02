@@ -1,0 +1,2321 @@
+{% extends "base.html" %}
+
+{% block head_extra %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.fullscreen/3.0.2/Control.FullScreen.css" />
+<style>
+    .custom-map-marker {
+        background: linear-gradient(135deg, #e2574c, #f97316);
+        width: 36px; height: 36px;
+        border-radius: 50% 50% 50% 0;
+        transform: rotate(-45deg);
+        border: 3px solid #fff;
+        box-shadow: 0 3px 12px rgba(226,87,76,0.4);
+        display: flex; align-items: center; justify-content: center;
+    }
+    .custom-map-marker i {
+        transform: rotate(45deg);
+        color: #fff; font-size: 14px;
+    }
+    .restaurant-map-marker {
+        background: linear-gradient(135deg, #d97706, #f59e0b);
+        width: 28px; height: 28px;
+        border-radius: 50% 50% 50% 0;
+        transform: rotate(-45deg);
+        border: 2px solid #fff;
+        box-shadow: 0 2px 8px rgba(217,119,6,0.35);
+        display: flex; align-items: center; justify-content: center;
+    }
+    .restaurant-map-marker i {
+        transform: rotate(45deg);
+        color: #fff; font-size: 11px;
+    }
+    .leaflet-control-layers { border-radius: 12px !important; box-shadow: 0 4px 16px rgba(0,0,0,0.12) !important; border: none !important; }
+    .leaflet-control-layers-toggle { width: 36px !important; height: 36px !important; }
+    .leaflet-control-zoom a { border-radius: 8px !important; width: 32px !important; height: 32px !important; line-height: 32px !important; }
+    .leaflet-control-zoom { border-radius: 10px !important; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.12) !important; border: none !important; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<!-- Open Graph / Social Preview Card -->
+<meta property="og:type" content="website" />
+<meta property="og:title" content="{{ package.title }} — NammaKarnataka" />
+<meta property="og:description" content="{{ package.description[:160] }}" />
+<meta property="og:image" content="{{ request.url_root.rstrip('/') }}{{ package.gallery[0] if package.gallery else package.images[0] }}" />
+<meta property="og:url" content="{{ request.url }}" />
+<meta property="og:site_name" content="NammaKarnataka Tourism" />
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="{{ package.title }} — NammaKarnataka" />
+<meta name="twitter:description" content="{{ package.description[:160] }}" />
+<meta name="twitter:image" content="{{ request.url_root.rstrip('/') }}{{ package.gallery[0] if package.gallery else package.images[0] }}" />
+{% endblock %}
+
+{% block content %}
+<!-- Gallery Carousel Section -->
+<div class="gallery-section">
+    <!-- Main Display -->
+    <div class="gallery-main-wrapper">
+        <button class="gallery-nav-btn gallery-prev" onclick="galleryNav(-1)" aria-label="Previous">
+            <i class="fas fa-chevron-left"></i>
+        </button>
+        <div class="gallery-main" id="gallery-main">
+            <img id="gallery-main-img" src="{{ package.gallery[0] if package.gallery else package.images[0] }}"
+                alt="{{ package.title }}" onclick="openLightbox()" fetchpriority="high">
+        </div>
+        <button class="gallery-nav-btn gallery-next" onclick="galleryNav(1)" aria-label="Next">
+            <i class="fas fa-chevron-right"></i>
+        </button>
+        <!-- Title Overlay -->
+        <div class="gallery-title-overlay">
+            <h1>{{ package.title }}</h1>
+            <p><i class="fas fa-clock"></i> {{ package.duration }}</p>
+        </div>
+        <!-- Media Counter -->
+        <div class="gallery-counter" id="gallery-counter">
+            <i class="fas fa-images"></i> <span id="counter-text">1 / {{ (package.gallery|length) +
+                (package.videos|length if package.videos else 0) }}</span>
+        </div>
+    </div>
+
+    <!-- Thumbnail Strip -->
+    <div class="gallery-thumbstrip" id="gallery-thumbstrip">
+        {% for img in package.gallery %}
+        <div class="gallery-thumb {% if loop.first %}active{% endif %}" data-index="{{ loop.index0 }}" data-type="image"
+            data-src="{{ img }}" onclick="selectThumb(this)">
+            <img src="{{ img }}" alt="Gallery {{ loop.index }}" loading="lazy">
+        </div>
+        {% endfor %}
+        {% if package.videos %}
+        {% for vid in package.videos %}
+        <div class="gallery-thumb" data-index="{{ package.gallery|length + loop.index0 }}" data-type="video"
+            data-src="{{ vid|e }}" onclick="selectThumb(this)">
+            <div class="video-thumb-overlay">
+                <i class="fas fa-play-circle"></i>
+            </div>
+            <img class="video-thumb-image"
+                src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+                data-video-src="{{ vid|e }}" alt="Video {{ loop.index }}" loading="lazy">
+        </div>
+        {% endfor %}
+        {% endif %}
+    </div>
+</div>
+
+<!-- Lightbox Overlay -->
+<div class="gallery-lightbox" id="gallery-lightbox">
+    <button class="lightbox-close" onclick="closeLightbox()" aria-label="Close"><i class="fas fa-times"></i></button>
+    <button class="lightbox-nav lightbox-prev" onclick="lightboxNav(-1)" aria-label="Previous"><i
+            class="fas fa-chevron-left"></i></button>
+    <div class="lightbox-content" id="lightbox-content">
+        <img id="lightbox-img" src="" alt="Fullscreen view">
+    </div>
+    <button class="lightbox-nav lightbox-next" onclick="lightboxNav(1)" aria-label="Next"><i
+            class="fas fa-chevron-right"></i></button>
+    <div class="lightbox-counter" id="lightbox-counter"></div>
+</div>
+
+<div class="package-container">
+    <div class="package-main">
+        <div class="package-tags">
+            {% for tag in package.tags %}
+            <span class="tag"><i class="fas fa-check-circle"></i> {{ tag }}</span>
+            {% endfor %}
+            {% if package.carbon_score %}
+            <span class="tag carbon-score-tag {{ package.carbon_score.badge }}">
+                <i class="fas fa-leaf"></i> Carbon {{ package.carbon_score.score }}/100 ({{ package.carbon_score.level }})
+            </span>
+            {% endif %}
+            {% if package.transport_type %}
+            <span class="tag transport-tag"><i class="fas fa-route"></i> {{ package.transport_type.replace('_', ' ') | title }}</span>
+            {% endif %}
+        </div>
+
+        <h2>Overview</h2>
+        <p class="package-desc">{{ package.description }}</p>
+
+        <!-- Features & Highlights -->
+        {% if package.features %}
+        <h2><i class="fas fa-star" style="color: #f77728;"></i> Features & Highlights</h2>
+        <div class="features-grid">
+            {% for feature in package.features %}
+            <div class="feature-badge">
+                <i class="fas fa-check"></i> {{ feature }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <!-- Hyperlocal Story Mode -->
+        {% if package.hyperlocal_stories %}
+        <h2><i class="fas fa-podcast" style="color: #1d4ed8;"></i> Hyperlocal Story Mode</h2>
+        <div class="story-mode-wrap">
+            <div class="story-mode-headline">
+                <i class="fas fa-headphones"></i>
+                <span>Short documentary-style audio chapters about local history, myths, and culture.</span>
+            </div>
+            <div class="story-mode-grid">
+                {% for story in package.hyperlocal_stories %}
+                <div class="story-card">
+                    <div class="story-card-top">
+                        <span class="story-chip">{{ story.theme | title }}</span>
+                        <span class="story-duration"><i class="fas fa-clock"></i> {{ story.duration_sec }} sec</span>
+                    </div>
+                    <h3>{{ loop.index }}. {{ story.title }}</h3>
+                    <p>{{ story.narration }}</p>
+                    {% if story.audio_url %}
+                    <audio controls preload="none" class="story-audio">
+                        <source src="{{ story.audio_url }}" type="audio/mpeg">
+                        Your browser does not support audio playback.
+                    </audio>
+                    {% else %}
+                    <div class="story-fallback-note">
+                        <i class="fas fa-info-circle"></i> Audio file is not available right now.
+                        <button type="button" class="story-fallback-btn" onclick="playStoryFallback({{ loop.index0 }}, this)">
+                            <i class="fas fa-volume-up"></i> Play Narration
+                        </button>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Accessibility Score -->
+        {% set acc = package.accessibility | default({}) %}
+        {% if acc.wheelchair or acc.family or acc.senior %}
+        <h2><i class="fas fa-universal-access" style="color: #7c3aed;"></i> Accessibility Score</h2>
+        <div class="accessibility-grid">
+            {% if acc.wheelchair %}
+            <div class="acc-card">
+                <div class="acc-icon wheelchair"><i class="fas fa-wheelchair"></i></div>
+                <div class="acc-info">
+                    <span class="acc-label">Wheelchair Friendly</span>
+                    <div class="acc-bar-track"><div class="acc-bar-fill" style="width: {{ acc.wheelchair * 20 }}%;"></div></div>
+                    <span class="acc-score">{{ acc.wheelchair }}/5</span>
+                </div>
+            </div>
+            {% endif %}
+            {% if acc.family %}
+            <div class="acc-card">
+                <div class="acc-icon family"><i class="fas fa-baby"></i></div>
+                <div class="acc-info">
+                    <span class="acc-label">Family Friendly</span>
+                    <div class="acc-bar-track"><div class="acc-bar-fill family" style="width: {{ acc.family * 20 }}%;"></div></div>
+                    <span class="acc-score">{{ acc.family }}/5</span>
+                </div>
+            </div>
+            {% endif %}
+            {% if acc.senior %}
+            <div class="acc-card">
+                <div class="acc-icon senior"><i class="fas fa-user-shield"></i></div>
+                <div class="acc-info">
+                    <span class="acc-label">Senior Friendly</span>
+                    <div class="acc-bar-track"><div class="acc-bar-fill senior" style="width: {{ acc.senior * 20 }}%;"></div></div>
+                    <span class="acc-score">{{ acc.senior }}/5</span>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <h2>Day-wise Itinerary</h2>
+        <div class="itinerary-timeline">
+            {% for day in package.itinerary %}
+            <div class="timeline-item">
+                <div class="timeline-dot"></div>
+                <div class="timeline-content">
+                    <div class="day-badge">Day {{ day.day }}</div>
+                    <h3>{{ day.title }}</h3>
+                    <p>{{ day.desc }}</p>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Location Map -->
+        {% if package.location and package.location.lat %}
+        <h2><i class="fas fa-map-marked-alt" style="color: #e2574c;"></i> Location Map</h2>
+        <div id="package-map"
+            style="height: 420px; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; margin-bottom: 20px; z-index: 1; box-shadow: 0 4px 20px rgba(0,0,0,0.08);">
+        </div>
+        {% endif %}
+
+        <!-- Climate / Weather Section -->
+        {% if package.location and package.location.lat %}
+        <h2><i class="fas fa-shield-heart" style="color: #16a34a;"></i> Local Trust Graph Score</h2>
+        <div class="trust-graph-widget" id="trust-graph-widget" data-lat="{{ package.location.lat }}" data-lng="{{ package.location.lng }}" data-tag="{{ package.tag }}">
+            <div class="trust-loading" id="trust-loading"><i class="fas fa-spinner fa-spin"></i> Calculating live trust indicators...</div>
+            <div class="trust-error" id="trust-error" style="display:none;"><i class="fas fa-exclamation-triangle"></i> Unable to load trust score right now.</div>
+            <div class="trust-content" id="trust-content" style="display:none;">
+                <div class="trust-overall-row">
+                    <div class="trust-score-badge" id="trust-score-badge">--</div>
+                    <div>
+                        <div class="trust-level" id="trust-level">--</div>
+                        <div class="trust-focus" id="trust-focus">Focus Area: --</div>
+                    </div>
+                </div>
+                <div class="trust-grid">
+                    <div class="trust-card"><span>Safety</span><strong id="trust-safety">--</strong></div>
+                    <div class="trust-card"><span>Crowd Behavior</span><strong id="trust-crowd">--</strong></div>
+                    <div class="trust-card"><span>Road Reliability</span><strong id="trust-road">--</strong></div>
+                    <div class="trust-card"><span>Medical Proximity</span><strong id="trust-medical">--</strong></div>
+                </div>
+                <div class="trust-recommendation" id="trust-recommendation"></div>
+            </div>
+        </div>
+
+        <h2><i class="fas fa-cloud-sun" style="color: #008cff;"></i> Current Climate & 7-Day Forecast</h2>
+
+        <!-- Agency Climate Info (if provided) -->
+        {% if package.climate_info and (package.climate_info.best_season or package.climate_info.expected_temp or package.climate_info.terrain or package.climate_info.weather_tips) %}
+        <div class="climate-agency-info">
+            <div class="climate-agency-header">
+                <i class="fas fa-info-circle"></i> Travel Climate Guide by Agency
+            </div>
+            <div class="climate-agency-grid">
+                {% if package.climate_info.best_season %}
+                <div class="climate-agency-item">
+                    <i class="fas fa-calendar-alt"></i>
+                    <span>Best Season</span>
+                    <strong>{{ package.climate_info.best_season }}</strong>
+                </div>
+                {% endif %}
+                {% if package.climate_info.expected_temp %}
+                <div class="climate-agency-item">
+                    <i class="fas fa-thermometer-half"></i>
+                    <span>Expected Temp</span>
+                    <strong>{{ package.climate_info.expected_temp }}</strong>
+                </div>
+                {% endif %}
+                {% if package.climate_info.terrain %}
+                <div class="climate-agency-item">
+                    <i class="fas fa-mountain"></i>
+                    <span>Terrain</span>
+                    <strong>{{ package.climate_info.terrain | capitalize }}</strong>
+                </div>
+                {% endif %}
+                {% if package.climate_info.rainfall %}
+                <div class="climate-agency-item">
+                    <i class="fas fa-cloud-rain"></i>
+                    <span>Rainfall</span>
+                    <strong>{{ package.climate_info.rainfall | capitalize }}</strong>
+                </div>
+                {% endif %}
+            </div>
+            {% if package.climate_info.weather_tips %}
+            <div class="climate-agency-tip">
+                <i class="fas fa-suitcase"></i> <strong>Packing Tips:</strong> {{ package.climate_info.weather_tips }}
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <div class="climate-widget" id="climate-widget" data-lat="{{ package.location.lat }}" data-lng="{{ package.location.lng }}" data-place="{{ package.location.name }}">
+            <div class="climate-loading" id="climate-loading">
+                <i class="fas fa-spinner fa-spin"></i> Fetching live weather for {{ package.location.name }}...
+            </div>
+            <div class="climate-error" id="climate-error" style="display:none;">
+                <i class="fas fa-exclamation-triangle"></i> Unable to load weather data. Please try again later.
+            </div>
+            <div class="climate-content" id="climate-content" style="display:none;">
+                <!-- Current Weather -->
+                <div class="climate-current">
+                    <div class="climate-current-main">
+                        <span class="climate-icon" id="climate-icon"></span>
+                        <div class="climate-temp-block">
+                            <span class="climate-temp" id="climate-temp"></span>
+                            <span class="climate-desc" id="climate-desc"></span>
+                        </div>
+                    </div>
+                    <div class="climate-details">
+                        <div class="climate-detail-item">
+                            <i class="fas fa-temperature-low"></i>
+                            <span>Feels Like</span>
+                            <strong id="climate-feels"></strong>
+                        </div>
+                        <div class="climate-detail-item">
+                            <i class="fas fa-tint"></i>
+                            <span>Humidity</span>
+                            <strong id="climate-humidity"></strong>
+                        </div>
+                        <div class="climate-detail-item">
+                            <i class="fas fa-wind"></i>
+                            <span>Wind</span>
+                            <strong id="climate-wind"></strong>
+                        </div>
+                    </div>
+                </div>
+                <!-- 7-Day Forecast -->
+                <div class="climate-forecast" id="climate-forecast"></div>
+                <!-- Travel Tip -->
+                <div class="climate-tip" id="climate-tip"></div>
+
+                <!-- Monsoon Magic Mode -->
+                <div class="monsoon-magic-panel" id="monsoon-magic-panel" style="display:none;">
+                    <div class="monsoon-magic-head">
+                        <div class="monsoon-magic-title" id="monsoon-magic-title"></div>
+                        <div class="monsoon-magic-subtitle" id="monsoon-magic-subtitle"></div>
+                    </div>
+                    <div class="monsoon-magic-rec-grid" id="monsoon-magic-rec-grid"></div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Sunrise / Sunset / Golden Hour -->
+        {% if package.location and package.location.lat %}
+        <h2><i class="fas fa-sun" style="color: #f59e0b;"></i> Sunrise, Sunset & Golden Hour</h2>
+        <div class="golden-hour-widget" id="golden-hour-widget" data-lat="{{ package.location.lat }}" data-lng="{{ package.location.lng }}">
+            <div class="golden-loading" id="golden-loading">
+                <i class="fas fa-spinner fa-spin"></i> Calculating sun times for {{ package.location.name }}...
+            </div>
+            <div class="golden-error" id="golden-error" style="display:none;">
+                <i class="fas fa-exclamation-triangle"></i> Unable to load sun times.
+            </div>
+            <div class="golden-content" id="golden-content" style="display:none;">
+                <div class="golden-cards">
+                    <div class="golden-card sunrise-card">
+                        <div class="golden-card-icon"><i class="fas fa-sunrise"></i></div>
+                        <div class="golden-card-label">Sunrise</div>
+                        <div class="golden-card-time" id="sun-rise">--:--</div>
+                    </div>
+                    <div class="golden-card golden-am-card">
+                        <div class="golden-card-icon"><i class="fas fa-camera"></i></div>
+                        <div class="golden-card-label">Morning Golden Hour</div>
+                        <div class="golden-card-time" id="golden-am">--:-- – --:--</div>
+                    </div>
+                    <div class="golden-card noon-card">
+                        <div class="golden-card-icon"><i class="fas fa-sun"></i></div>
+                        <div class="golden-card-label">Solar Noon</div>
+                        <div class="golden-card-time" id="solar-noon">--:--</div>
+                    </div>
+                    <div class="golden-card golden-pm-card">
+                        <div class="golden-card-icon"><i class="fas fa-camera-retro"></i></div>
+                        <div class="golden-card-label">Evening Golden Hour</div>
+                        <div class="golden-card-time" id="golden-pm">--:-- – --:--</div>
+                    </div>
+                    <div class="golden-card sunset-card">
+                        <div class="golden-card-icon"><i class="fas fa-sunset"></i></div>
+                        <div class="golden-card-label">Sunset</div>
+                        <div class="golden-card-time" id="sun-set">--:--</div>
+                    </div>
+                    <div class="golden-card twilight-card">
+                        <div class="golden-card-icon"><i class="fas fa-moon"></i></div>
+                        <div class="golden-card-label">Twilight Ends</div>
+                        <div class="golden-card-time" id="twilight-end">--:--</div>
+                    </div>
+                </div>
+                <div class="golden-day-length">
+                    <i class="fas fa-hourglass-half"></i> Day Length: <strong id="day-length">--h --m</strong>
+                </div>
+                <p class="golden-tip"><i class="fas fa-lightbulb"></i> <strong>Photography Tip:</strong> The golden hours offer the warmest, softest natural light — ideal for landscape and portrait photography.</p>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Nearby Restaurants Section -->
+        {% if package.location and package.location.lat and package.show_nearby_restaurants | default(true) %}
+        <h2><i class="fas fa-utensils" style="color: #d97706;"></i> Nearby Restaurants & Cafes</h2>
+        <div class="restaurants-widget" id="restaurants-widget" data-lat="{{ package.location.lat }}" data-lng="{{ package.location.lng }}">
+            <div class="restaurants-loading" id="restaurants-loading">
+                <i class="fas fa-spinner fa-spin"></i> Finding nearby restaurants...
+            </div>
+            <div class="restaurants-error" id="restaurants-error" style="display:none;">
+                <i class="fas fa-exclamation-triangle"></i> Unable to load nearby restaurants.
+            </div>
+            <div class="restaurants-content" id="restaurants-content" style="display:none;">
+                <div class="restaurants-grid" id="restaurants-grid"></div>
+                <p class="restaurants-note"><i class="fas fa-info-circle"></i> Data sourced from OpenStreetMap. Results may vary.</p>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Reviews & Travel Stories Section -->
+        <div class="reviews-section" id="reviews-section" data-pkg-id="{{ package.id }}">
+            <h2><i class="fas fa-pen-nib" style="color: #8b5cf6;"></i> Traveler Reviews & Stories</h2>
+
+            <!-- Review Stats Summary -->
+            <div class="review-stats" id="review-stats" style="display:none;">
+                <div class="review-stats-left">
+                    <div class="review-big-rating" id="review-avg">0</div>
+                    <div class="review-stars-row" id="review-avg-stars"></div>
+                    <div class="review-total" id="review-total">0 reviews</div>
+                </div>
+                <div class="review-stats-bars" id="review-bars"></div>
+            </div>
+
+            <!-- Write Review Button -->
+            <button class="btn-write-review" onclick="toggleReviewForm()">
+                <i class="fas fa-edit"></i> Write a Review
+            </button>
+
+            <!-- Review Form (hidden by default) -->
+            <div class="review-form-wrapper" id="review-form-wrapper" style="display:none;">
+                <form class="review-form" id="review-form" onsubmit="submitReview(event)">
+                    <h3><i class="fas fa-star"></i> Share Your Experience</h3>
+
+                    <div class="review-rating-select">
+                        <label>Your Rating</label>
+                        <div class="star-select" id="star-select">
+                            <i class="far fa-star" data-val="1"></i>
+                            <i class="far fa-star" data-val="2"></i>
+                            <i class="far fa-star" data-val="3"></i>
+                            <i class="far fa-star" data-val="4"></i>
+                            <i class="far fa-star" data-val="5"></i>
+                        </div>
+                        <input type="hidden" name="rating" id="review-rating" value="0">
+                    </div>
+
+                    <div class="review-form-group">
+                        <label>Review Title</label>
+                        <input type="text" name="title" placeholder="Summarize your experience..." required maxlength="100">
+                    </div>
+
+                    <div class="review-form-group">
+                        <label>Your Story</label>
+                        <textarea name="content" placeholder="Share details about your trip, what you loved, tips for others..." rows="5" required maxlength="2000"></textarea>
+                    </div>
+
+                    <div class="review-form-row">
+                        <div class="review-form-group">
+                            <label>Trip Type</label>
+                            <select name="trip_type">
+                                <option value="">Select...</option>
+                                <option value="Solo">Solo Trip</option>
+                                <option value="Couple">Couple</option>
+                                <option value="Family">Family</option>
+                                <option value="Friends">Friends</option>
+                                <option value="Business">Business</option>
+                            </select>
+                        </div>
+                        <div class="review-form-group">
+                            <label>Upload Photos</label>
+                            <input type="file" name="photos" multiple accept="image/*" class="review-file-input">
+                        </div>
+                    </div>
+
+                    <div class="review-form-actions">
+                        <button type="submit" class="review-submit-btn"><i class="fas fa-paper-plane"></i> Post Review</button>
+                        <button type="button" class="review-cancel-btn" onclick="toggleReviewForm()">Cancel</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Reviews List -->
+            <div class="reviews-list" id="reviews-list">
+                <div class="reviews-loading"><i class="fas fa-spinner fa-spin"></i> Loading reviews...</div>
+            </div>
+        </div>
+    </div>
+    <div class="package-sidebar">
+        <div class="booking-panel">
+            <div class="price-header">
+                <span class="old-price">₹{{ package.old_price }}</span>
+                <span class="new-price">₹{{ package.price }}</span>
+                <span class="discount">{{ package.discount }}</span>
+            </div>
+            <p class="per-person">per person</p>
+
+            <form class="booking-form" action="/book" method="POST">
+                <input type="hidden" name="package_id" value="{{ package.id }}">
+                <div class="form-group">
+                    <label>Your Name</label>
+                    <input type="text" name="customer_name" value="{{ session.get('name', '') }}" placeholder="Full name" required>
+                </div>
+                <div class="form-group">
+                    <label>Phone Number</label>
+                    <input type="tel" name="customer_phone" placeholder="e.g. 9876543210" required>
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" name="customer_email" placeholder="your@email.com" required>
+                </div>
+                <div class="form-group">
+                    <label>Travel Date</label>
+                    <input type="date" name="travel_date" required>
+                </div>
+                <div class="form-group">
+                    <label>Travelers</label>
+                    <input type="number" name="travelers" min="1" value="2" required>
+                </div>
+                <!-- Call to Action -->
+                <button type="submit" class="btn-book-now"><i class="fas fa-paper-plane"></i> SEND BOOKING REQUEST</button>
+                <p style="text-align:center;font-size:12px;color:#94a3b8;margin-top:8px;">Agency will review & approve your request</p>
+            </form>
+
+            <div class="panel-trust">
+                <p><i class="fab fa-whatsapp"></i> Get instant confirmation on WhatsApp</p>
+                <p><i class="fas fa-undo"></i> Free cancellation up to 24 hours</p>
+            </div>
+
+            <!-- Download PDF Itinerary -->
+            <button class="btn-download-pdf" id="btn-download-pdf" onclick="downloadItineraryPDF()">
+                <i class="fas fa-file-pdf"></i> Download Itinerary PDF
+            </button>
+
+            <!-- Share Package -->
+            <div class="share-section">
+                <p class="share-label"><i class="fas fa-share-alt"></i> Share this trip</p>
+                <div class="share-buttons">
+                    <button class="share-btn whatsapp" onclick="sharePackage('whatsapp')" title="Share on WhatsApp">
+                        <i class="fab fa-whatsapp"></i>
+                    </button>
+                    <button class="share-btn twitter" onclick="sharePackage('twitter')" title="Share on X (Twitter)">
+                        <i class="fab fa-x-twitter"></i>
+                    </button>
+                    <button class="share-btn instagram" onclick="sharePackage('instagram')" title="Share on Instagram">
+                        <i class="fab fa-instagram"></i>
+                    </button>
+                    <button class="share-btn facebook" onclick="sharePackage('facebook')" title="Share on Facebook">
+                        <i class="fab fa-facebook-f"></i>
+                    </button>
+                    <button class="share-btn copy-link" onclick="sharePackage('copy')" title="Copy link">
+                        <i class="fas fa-link" id="copy-link-icon"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Ambient Soundscape Floating Widget -->
+{% if package.ambient_sound %}
+<div class="ambient-widget" id="ambient-widget">
+    <button class="ambient-toggle" id="ambient-toggle" onclick="toggleAmbientSound()" title="Toggle ambient sounds">
+        <i class="fas {{ package.ambient_sound.icon }}" id="ambient-icon"></i>
+    </button>
+    <div class="ambient-info" id="ambient-info">
+        <div class="ambient-eq" id="ambient-eq">
+            <span class="eq-bar"></span>
+            <span class="eq-bar"></span>
+            <span class="eq-bar"></span>
+            <span class="eq-bar"></span>
+            <span class="eq-bar"></span>
+        </div>
+        <span class="ambient-label">{{ package.ambient_sound.label }}</span>
+        <input type="range" class="ambient-volume" id="ambient-volume" min="0" max="100" value="30"
+            oninput="setAmbientVolume(this.value)" title="Volume">
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<!-- Leaflet JS + Fullscreen Plugin -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.fullscreen/3.0.2/Control.FullScreen.min.js"></script>
+<script>
+    const storyFallbackTexts = {{ package.hyperlocal_stories | map(attribute='narration') | list | tojson | safe if package.hyperlocal_stories else '[]' }};
+    let storyFallbackUtterance = null;
+
+    function playStoryFallback(idx, btn) {
+        if (!('speechSynthesis' in window)) {
+            alert('Your browser does not support built-in speech narration.');
+            return;
+        }
+
+        const text = (storyFallbackTexts[idx] || '').trim();
+        if (!text) {
+            alert('Narration text is not available for this story.');
+            return;
+        }
+
+        const isSpeaking = btn.dataset.speaking === '1';
+        if (isSpeaking) {
+            window.speechSynthesis.cancel();
+            btn.dataset.speaking = '0';
+            btn.innerHTML = '<i class="fas fa-volume-up"></i> Play Narration';
+            return;
+        }
+
+        window.speechSynthesis.cancel();
+        document.querySelectorAll('.story-fallback-btn').forEach(function(b) {
+            b.dataset.speaking = '0';
+            b.innerHTML = '<i class="fas fa-volume-up"></i> Play Narration';
+        });
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 0.96;
+        utterance.pitch = 1;
+        utterance.lang = 'en-IN';
+
+        utterance.onstart = function() {
+            btn.dataset.speaking = '1';
+            btn.innerHTML = '<i class="fas fa-stop"></i> Stop Narration';
+        };
+
+        utterance.onend = function() {
+            btn.dataset.speaking = '0';
+            btn.innerHTML = '<i class="fas fa-volume-up"></i> Play Narration';
+        };
+
+        utterance.onerror = function() {
+            btn.dataset.speaking = '0';
+            btn.innerHTML = '<i class="fas fa-volume-up"></i> Play Narration';
+            alert('Unable to play narration right now.');
+        };
+
+        storyFallbackUtterance = utterance;
+        window.speechSynthesis.speak(utterance);
+    }
+
+    // Initialize map with layers, custom marker, fullscreen
+    var pkgMap = null;
+    (function () {
+        var mapEl = document.getElementById('package-map');
+        if (!mapEl) return;
+
+        var lat = {{ package.location.lat if package.location else 0 }};
+        var lng = {{ package.location.lng if package.location else 0 }};
+        var locName = '{{ package.location.name if package.location else "" }}';
+
+        if (lat === 0 && lng === 0) return;
+
+        // Tile layers
+        var streets = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors',
+            maxZoom: 19
+        });
+        var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: '&copy; Esri &mdash; World Imagery',
+            maxZoom: 19
+        });
+        var terrain = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenTopoMap',
+            maxZoom: 17
+        });
+
+        pkgMap = L.map('package-map', {
+            center: [lat, lng],
+            zoom: 13,
+            layers: [streets],
+            fullscreenControl: true,
+            fullscreenControlOptions: { position: 'topright' }
+        });
+
+        // Layer control
+        L.control.layers({
+            '<i class="fas fa-road"></i> Streets': streets,
+            '<i class="fas fa-satellite"></i> Satellite': satellite,
+            '<i class="fas fa-mountain"></i> Terrain': terrain
+        }, null, { position: 'topright', collapsed: true }).addTo(pkgMap);
+
+        // Custom destination marker
+        var destIcon = L.divIcon({
+            className: '',
+            html: '<div class="custom-map-marker"><i class="fas fa-map-pin"></i></div>',
+            iconSize: [36, 36],
+            iconAnchor: [18, 36],
+            popupAnchor: [0, -36]
+        });
+
+        var marker = L.marker([lat, lng], { icon: destIcon }).addTo(pkgMap);
+        marker.bindPopup(
+            '<div style="text-align:center;font-family:Inter,sans-serif;padding:4px;">' +
+            '<b style="font-size:14px;color:#1a202c;">{{ package.title }}</b><br>' +
+            '<span style="color:#666;font-size:12px;"><i class="fas fa-map-pin" style="color:#e2574c;"></i> ' + locName + '</span>' +
+            '</div>',
+            { maxWidth: 220 }
+        ).openPopup();
+    })();
+</script>
+<!-- Data passed from backend -->
+<script id="ambient-data"
+    type="application/json">{{ package.ambient_sound | tojson | safe if package.ambient_sound else '{}' }}</script>
+<script>
+    // Gallery data
+    const galleryItems = [];
+    document.querySelectorAll('.gallery-thumb').forEach(thumb => {
+        galleryItems.push({
+            type: thumb.dataset.type,
+            src: thumb.dataset.src
+        });
+    });
+
+    function extractIframeSrc(raw) {
+        if (!raw) return '';
+        const match = raw.match(/src\s*=\s*["']([^"']+)["']/i);
+        return match ? match[1] : raw;
+    }
+
+    function extractYouTubeVideoId(rawUrl) {
+        if (!rawUrl) return null;
+
+        const cleaned = extractIframeSrc(rawUrl).trim();
+        if (!cleaned) return null;
+
+        let parsed;
+        try {
+            parsed = new URL(cleaned, window.location.origin);
+        } catch (_) {
+            return null;
+        }
+
+        const host = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+        let id = null;
+
+        if (host === 'youtu.be') {
+            id = parsed.pathname.split('/').filter(Boolean)[0];
+        } else if (host.endsWith('youtube.com') || host.endsWith('youtube-nocookie.com')) {
+            if (parsed.pathname.startsWith('/embed/')) {
+                id = parsed.pathname.split('/embed/')[1];
+            } else if (parsed.pathname.startsWith('/shorts/')) {
+                id = parsed.pathname.split('/shorts/')[1];
+            } else if (parsed.pathname === '/watch') {
+                id = parsed.searchParams.get('v');
+            }
+        }
+
+        if (!id) return null;
+        id = id.split(/[?&#/]/)[0].trim();
+        return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
+    }
+
+    function toYouTubeEmbedUrl(rawUrl) {
+        const id = extractYouTubeVideoId(rawUrl);
+        return id ? `https://www.youtube-nocookie.com/embed/${id}` : null;
+    }
+
+    function toYouTubeThumbnailUrl(rawUrl) {
+        const id = extractYouTubeVideoId(rawUrl);
+        return id ? `https://img.youtube.com/vi/${id}/mqdefault.jpg` : null;
+    }
+
+    function isDirectVideoFile(url) {
+        if (!url) return false;
+        return /\.(mp4|webm|mov|ogg)(\?.*)?$/i.test(url);
+    }
+
+    function renderVideoInMain(mainEl, src) {
+        mainEl.innerHTML = '';
+
+        const youtubeEmbedUrl = toYouTubeEmbedUrl(src);
+        if (youtubeEmbedUrl) {
+            const iframe = document.createElement('iframe');
+            iframe.src = `${youtubeEmbedUrl}?autoplay=1&rel=0`;
+            iframe.title = 'YouTube video player';
+            iframe.loading = 'lazy';
+            iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+            iframe.allowFullscreen = true;
+            mainEl.appendChild(iframe);
+            return;
+        }
+
+        if (isDirectVideoFile(src)) {
+            const video = document.createElement('video');
+            video.src = src;
+            video.controls = true;
+            video.autoplay = true;
+            video.playsInline = true;
+            video.preload = 'metadata';
+            mainEl.appendChild(video);
+            return;
+        }
+
+        const fallback = document.createElement('div');
+        fallback.className = 'gallery-video-fallback';
+        fallback.innerHTML = '<i class="fas fa-exclamation-circle"></i><span>Video link is invalid or unsupported.</span>';
+        mainEl.appendChild(fallback);
+    }
+
+    function hydrateVideoThumbnails() {
+        document.querySelectorAll('.video-thumb-image').forEach((img) => {
+            const thumbUrl = toYouTubeThumbnailUrl(img.dataset.videoSrc || '');
+            if (thumbUrl) {
+                img.src = thumbUrl;
+            } else {
+                img.classList.add('video-thumb-placeholder');
+            }
+        });
+    }
+
+    let currentIndex = 0;
+    const totalItems = galleryItems.length;
+
+    hydrateVideoThumbnails();
+
+    function updateMainDisplay(index) {
+        currentIndex = index;
+        const item = galleryItems[index];
+        const mainEl = document.getElementById('gallery-main');
+
+        if (item.type === 'video') {
+            renderVideoInMain(mainEl, item.src);
+        } else {
+            mainEl.innerHTML = `<img id="gallery-main-img" src="${item.src}" alt="Gallery" onclick="openLightbox()">`;
+        }
+
+        // Update counter
+        document.getElementById('counter-text').textContent = `${index + 1} / ${totalItems}`;
+
+        // Update active thumb
+        document.querySelectorAll('.gallery-thumb').forEach((t, i) => {
+            t.classList.toggle('active', i === index);
+        });
+
+        // Auto-scroll the thumbstrip to make the active thumbnail visible
+        const thumbstrip = document.getElementById('gallery-thumbstrip');
+        const activeThumb = document.querySelector('.gallery-thumb.active');
+        if (thumbstrip && activeThumb) {
+            const stripRect = thumbstrip.getBoundingClientRect();
+            const thumbRect = activeThumb.getBoundingClientRect();
+            if (thumbRect.left < stripRect.left || thumbRect.right > stripRect.right) {
+                activeThumb.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+            }
+        }
+    }
+
+    function selectThumb(el) {
+        const index = parseInt(el.dataset.index);
+        updateMainDisplay(index);
+    }
+
+    function galleryNav(dir) {
+        let newIndex = currentIndex + dir;
+        if (newIndex < 0) newIndex = totalItems - 1;
+        if (newIndex >= totalItems) newIndex = 0;
+        updateMainDisplay(newIndex);
+    }
+
+    // Lightbox
+    function openLightbox() {
+        const item = galleryItems[currentIndex];
+        if (item.type === 'video') return; // don't open lightbox for videos
+        const lb = document.getElementById('gallery-lightbox');
+        const lbContent = document.getElementById('lightbox-content');
+        lbContent.innerHTML = `<img id="lightbox-img" src="${item.src}" alt="Fullscreen view">`;
+        document.getElementById('lightbox-counter').textContent = `${currentIndex + 1} / ${totalItems}`;
+        lb.classList.add('open');
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closeLightbox() {
+        document.getElementById('gallery-lightbox').classList.remove('open');
+        document.body.style.overflow = '';
+    }
+
+    function lightboxNav(dir) {
+        let newIndex = currentIndex + dir;
+        if (newIndex < 0) newIndex = totalItems - 1;
+        if (newIndex >= totalItems) newIndex = 0;
+
+        // Skip videos in lightbox
+        let attempts = 0;
+        while (galleryItems[newIndex].type === 'video' && attempts < totalItems) {
+            newIndex += dir;
+            if (newIndex < 0) newIndex = totalItems - 1;
+            if (newIndex >= totalItems) newIndex = 0;
+            attempts++;
+        }
+
+        currentIndex = newIndex;
+        updateMainDisplay(currentIndex);
+        const item = galleryItems[currentIndex];
+        document.getElementById('lightbox-content').innerHTML = `<img id="lightbox-img" src="${item.src}" alt="Fullscreen view">`;
+        document.getElementById('lightbox-counter').textContent = `${currentIndex + 1} / ${totalItems}`;
+    }
+
+    // Keyboard navigation
+    document.addEventListener('keydown', function (e) {
+        const lb = document.getElementById('gallery-lightbox');
+        if (lb.classList.contains('open')) {
+            if (e.key === 'Escape') closeLightbox();
+            if (e.key === 'ArrowLeft') lightboxNav(-1);
+            if (e.key === 'ArrowRight') lightboxNav(1);
+        } else {
+            if (e.key === 'ArrowLeft') galleryNav(-1);
+            if (e.key === 'ArrowRight') galleryNav(1);
+        }
+    });
+
+    // Close lightbox on background click
+    document.getElementById('gallery-lightbox').addEventListener('click', function (e) {
+        if (e.target === this) closeLightbox();
+    });
+
+
+
+    // ============================================
+    // AMBIENT SOUNDSCAPE — Web Audio API Engine
+    // ============================================
+    const ambientConfig = JSON.parse(document.getElementById('ambient-data').textContent || '{}');
+    const ambientData = ambientConfig; // alias used by startAmbientSound
+    let audioCtx = null;
+    let masterGain = null;
+    let ambientPlaying = false;
+    let ambientNodes = [];
+
+    // --- LocalStorage persistence helpers ---
+    const AMBIENT_STORAGE_KEY = 'ambientSoundState';
+
+    function saveAmbientState() {
+        try {
+            localStorage.setItem(AMBIENT_STORAGE_KEY, JSON.stringify({
+                playing: ambientPlaying,
+                volume: parseInt(document.getElementById('ambient-volume').value),
+                type: ambientConfig.type || ''
+            }));
+        } catch (e) { /* quota exceeded or private mode */ }
+    }
+
+    function loadAmbientState() {
+        try {
+            const raw = localStorage.getItem(AMBIENT_STORAGE_KEY);
+            return raw ? JSON.parse(raw) : null;
+        } catch (e) { return null; }
+    }
+
+    function clearAmbientState() {
+        try { localStorage.removeItem(AMBIENT_STORAGE_KEY); } catch (e) {}
+    }
+
+    function createNoiseBuffer(ctx, duration, type) {
+        const sr = ctx.sampleRate;
+        const len = sr * duration;
+        const buf = ctx.createBuffer(1, len, sr);
+        const data = buf.getChannelData(0);
+        let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+        for (let i = 0; i < len; i++) {
+            const white = Math.random() * 2 - 1;
+            if (type === 'pink') {
+                b0 = 0.99886 * b0 + white * 0.0555179;
+                b1 = 0.99332 * b1 + white * 0.0750759;
+                b2 = 0.96900 * b2 + white * 0.1538520;
+                b3 = 0.86650 * b3 + white * 0.3104856;
+                b4 = 0.55000 * b4 + white * 0.5329522;
+                b5 = -0.7616 * b5 - white * 0.0168980;
+                data[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.05;
+                b6 = white * 0.115926;
+            } else if (type === 'brown') {
+                data[i] = (b0 + white * 0.02) * 0.8;
+                b0 = data[i];
+                data[i] *= 3.5;
+            } else {
+                data[i] = white * 0.2;
+            }
+        }
+        return buf;
+    }
+
+    function buildForestSoundscape(ctx, dest) {
+        // Pink noise base (rustling leaves)
+        const noiseBuf = createNoiseBuffer(ctx, 4, 'pink');
+        const noise = ctx.createBufferSource();
+        noise.buffer = noiseBuf;
+        noise.loop = true;
+        const noiseGain = ctx.createGain();
+        noiseGain.gain.value = 0.15;
+        const lpf = ctx.createBiquadFilter();
+        lpf.type = 'lowpass'; lpf.frequency.value = 2000;
+        noise.connect(lpf).connect(noiseGain).connect(dest);
+        noise.start();
+        ambientNodes.push(noise);
+
+        // Bird chirps
+        function chirp() {
+            if (!ambientPlaying) return;
+            const osc = ctx.createOscillator();
+            const g = ctx.createGain();
+            const freq = 2000 + Math.random() * 3000;
+            osc.frequency.setValueAtTime(freq, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(freq * (0.7 + Math.random() * 0.6), ctx.currentTime + 0.08);
+            g.gain.setValueAtTime(0, ctx.currentTime);
+            g.gain.linearRampToValueAtTime(0.03 + Math.random() * 0.02, ctx.currentTime + 0.02);
+            g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1 + Math.random() * 0.1);
+            osc.connect(g).connect(dest);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.2);
+            setTimeout(chirp, 800 + Math.random() * 4000);
+        }
+        setTimeout(chirp, 1000);
+        setTimeout(() => { if (ambientPlaying) chirp(); }, 2500);
+    }
+
+    function buildOceanSoundscape(ctx, dest) {
+        // Brown noise (ocean base)
+        const noiseBuf = createNoiseBuffer(ctx, 6, 'brown');
+        const noise = ctx.createBufferSource();
+        noise.buffer = noiseBuf;
+        noise.loop = true;
+        const noiseGain = ctx.createGain();
+        noiseGain.gain.value = 0.25;
+        const lpf = ctx.createBiquadFilter();
+        lpf.type = 'lowpass'; lpf.frequency.value = 800;
+        noise.connect(lpf).connect(noiseGain).connect(dest);
+        noise.start();
+        ambientNodes.push(noise);
+
+        // Wave amplitude modulation
+        const lfo = ctx.createOscillator();
+        lfo.frequency.value = 0.12;
+        const lfoGain = ctx.createGain();
+        lfoGain.gain.value = 0.12;
+        lfo.connect(lfoGain).connect(noiseGain.gain);
+        lfo.start();
+        ambientNodes.push(lfo);
+
+        // High-freq shimmer (foam)
+        const shimmerBuf = createNoiseBuffer(ctx, 3, 'white');
+        const shimmer = ctx.createBufferSource();
+        shimmer.buffer = shimmerBuf;
+        shimmer.loop = true;
+        const shimmerGain = ctx.createGain();
+        shimmerGain.gain.value = 0.03;
+        const hpf = ctx.createBiquadFilter();
+        hpf.type = 'highpass'; hpf.frequency.value = 3000;
+        shimmer.connect(hpf).connect(shimmerGain).connect(dest);
+        shimmer.start();
+        ambientNodes.push(shimmer);
+    }
+
+    function buildHeritageSoundscape(ctx, dest) {
+        // Low drone
+        const drone = ctx.createOscillator();
+        drone.type = 'sine';
+        drone.frequency.value = 130;
+        const droneGain = ctx.createGain();
+        droneGain.gain.value = 0.06;
+        drone.connect(droneGain).connect(dest);
+        drone.start();
+        ambientNodes.push(drone);
+
+        // Wind (filtered pink noise)
+        const windBuf = createNoiseBuffer(ctx, 5, 'pink');
+        const wind = ctx.createBufferSource();
+        wind.buffer = windBuf;
+        wind.loop = true;
+        const windGain = ctx.createGain();
+        windGain.gain.value = 0.08;
+        const bpf = ctx.createBiquadFilter();
+        bpf.type = 'bandpass'; bpf.frequency.value = 400; bpf.Q.value = 0.5;
+        wind.connect(bpf).connect(windGain).connect(dest);
+        wind.start();
+        ambientNodes.push(wind);
+
+        // Temple bells
+        function bell() {
+            if (!ambientPlaying) return;
+            const osc = ctx.createOscillator();
+            const g = ctx.createGain();
+            const freq = [523, 659, 784, 880][Math.floor(Math.random() * 4)];
+            osc.frequency.value = freq;
+            osc.type = 'sine';
+            g.gain.setValueAtTime(0.05, ctx.currentTime);
+            g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 2.5);
+            osc.connect(g).connect(dest);
+            osc.start(); osc.stop(ctx.currentTime + 3);
+            setTimeout(bell, 3000 + Math.random() * 6000);
+        }
+        setTimeout(bell, 2000);
+    }
+
+    function buildWildlifeSoundscape(ctx, dest) {
+        // Forest base
+        const noiseBuf = createNoiseBuffer(ctx, 4, 'pink');
+        const noise = ctx.createBufferSource();
+        noise.buffer = noiseBuf;
+        noise.loop = true;
+        const noiseGain = ctx.createGain();
+        noiseGain.gain.value = 0.12;
+        const lpf = ctx.createBiquadFilter();
+        lpf.type = 'lowpass'; lpf.frequency.value = 1500;
+        noise.connect(lpf).connect(noiseGain).connect(dest);
+        noise.start();
+        ambientNodes.push(noise);
+
+        // Cricket chirps
+        function cricket() {
+            if (!ambientPlaying) return;
+            const osc = ctx.createOscillator();
+            const g = ctx.createGain();
+            osc.frequency.value = 4200 + Math.random() * 800;
+            osc.type = 'sine';
+            const now = ctx.currentTime;
+            g.gain.setValueAtTime(0, now);
+            for (let j = 0; j < 6; j++) {
+                g.gain.linearRampToValueAtTime(0.015, now + j * 0.06 + 0.01);
+                g.gain.linearRampToValueAtTime(0, now + j * 0.06 + 0.04);
+            }
+            osc.connect(g).connect(dest);
+            osc.start(now); osc.stop(now + 0.4);
+            setTimeout(cricket, 1500 + Math.random() * 3000);
+        }
+        setTimeout(cricket, 1500);
+
+        // Occasional low animal call
+        function animalCall() {
+            if (!ambientPlaying) return;
+            const osc = ctx.createOscillator();
+            const g = ctx.createGain();
+            osc.frequency.value = 200 + Math.random() * 150;
+            osc.type = 'sine';
+            g.gain.setValueAtTime(0, ctx.currentTime);
+            g.gain.linearRampToValueAtTime(0.03, ctx.currentTime + 0.3);
+            g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.5);
+            osc.connect(g).connect(dest);
+            osc.start(); osc.stop(ctx.currentTime + 2);
+            setTimeout(animalCall, 8000 + Math.random() * 12000);
+        }
+        setTimeout(animalCall, 5000);
+    }
+
+    function startAmbientSound() {
+        // If AudioContext was previously closed, we need a fresh one
+        if (audioCtx && audioCtx.state === 'closed') {
+            audioCtx = null;
+            masterGain = null;
+        }
+
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            masterGain = audioCtx.createGain();
+            masterGain.gain.value = 0;
+            masterGain.connect(audioCtx.destination);
+        }
+
+        // CRITICAL: Resume suspended context (browsers block autoplay)
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
+
+        ambientPlaying = true;
+
+        const type = ambientData.type || 'forest';
+        if (type === 'forest') buildForestSoundscape(audioCtx, masterGain);
+        else if (type === 'ocean') buildOceanSoundscape(audioCtx, masterGain);
+        else if (type === 'heritage') buildHeritageSoundscape(audioCtx, masterGain);
+        else if (type === 'wildlife') buildWildlifeSoundscape(audioCtx, masterGain);
+        else buildForestSoundscape(audioCtx, masterGain);
+
+        // Fade in
+        const vol = parseInt(document.getElementById('ambient-volume').value) / 100;
+        masterGain.gain.linearRampToValueAtTime(vol, audioCtx.currentTime + 2);
+
+        // Persist state so it survives page reloads / server restarts
+        saveAmbientState();
+    }
+
+    function stopAmbientSound() {
+        ambientPlaying = false;
+        clearAmbientState();
+        if (masterGain && audioCtx) {
+            masterGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
+            setTimeout(() => {
+                ambientNodes.forEach(n => { try { n.stop(); } catch (e) { } });
+                ambientNodes = [];
+                if (audioCtx) { audioCtx.close(); audioCtx = null; }
+            }, 600);
+        }
+    }
+
+    function toggleAmbientSound() {
+        const widget = document.getElementById('ambient-widget');
+        const eq = document.getElementById('ambient-eq');
+        const btn = document.getElementById('ambient-toggle');
+
+        if (ambientPlaying) {
+            stopAmbientSound();
+            widget.classList.remove('playing');
+            eq.classList.remove('active');
+            btn.title = 'Play ambient sounds';
+        } else {
+            startAmbientSound();
+            widget.classList.add('playing');
+            eq.classList.add('active');
+            btn.title = 'Pause ambient sounds';
+        }
+    }
+
+    function setAmbientVolume(val) {
+        if (masterGain && audioCtx) {
+            masterGain.gain.linearRampToValueAtTime(val / 100, audioCtx.currentTime + 0.1);
+        }
+        // Persist volume change
+        if (ambientPlaying) saveAmbientState();
+    }
+
+    // Cleanup audio when leaving page
+    window.addEventListener('beforeunload', () => {
+        if (ambientPlaying) stopAmbientSound();
+    });
+
+    // AUTO-PLAY: Start ambient sound on first user interaction
+    // (Browsers require a user gesture before playing audio)
+    if (ambientConfig && ambientConfig.type) {
+        const savedState = loadAmbientState();
+        // Check if ambient was playing before (survives server restart / page reload)
+        const shouldResume = savedState && savedState.playing && savedState.type === ambientConfig.type;
+
+        if (shouldResume) {
+            // Restore saved volume
+            document.getElementById('ambient-volume').value = savedState.volume || 30;
+        }
+
+        let autoStarted = false;
+        function autoStartAmbient() {
+            if (autoStarted) return;
+            autoStarted = true;
+            // Remove all listeners once triggered
+            ['click', 'scroll', 'mousemove', 'touchstart', 'keydown'].forEach(evt =>
+                document.removeEventListener(evt, autoStartAmbient)
+            );
+
+            // Only auto-start if it was previously playing OR on first visit
+            if (shouldResume || !savedState) {
+                startAmbientSound();
+                const widget = document.getElementById('ambient-widget');
+                const eq = document.getElementById('ambient-eq');
+                const btn = document.getElementById('ambient-toggle');
+                if (widget) widget.classList.add('playing');
+                if (eq) eq.classList.add('active');
+                if (btn) btn.title = 'Pause ambient sounds';
+            }
+        }
+        // Listen for any user gesture
+        ['click', 'scroll', 'mousemove', 'touchstart', 'keydown'].forEach(evt =>
+            document.addEventListener(evt, autoStartAmbient, { once: false, passive: true })
+        );
+    }
+
+    // ============================================
+    // SHARE PACKAGE
+    // ============================================
+    function sharePackage(platform) {
+        const title = {{ package.title | tojson }};
+        const desc = {{ package.description[:120] | replace("\n", " ") | replace("\r", "") | tojson }};
+        const url = window.location.href;
+        const text = title + ' — ' + desc + '...';
+
+        switch (platform) {
+            case 'whatsapp': {
+                const waText = encodeURIComponent('Check out this amazing trip! \n\n*' + title + '*\n' + desc + '...\n\n' + url);
+                window.open('https://wa.me/?text=' + waText, '_blank', 'noopener');
+                break;
+            }
+            case 'twitter': {
+                const tweetText = encodeURIComponent('Check out this trip: ' + title + ' \uD83C\uDFDE️');
+                const tweetUrl = encodeURIComponent(url);
+                window.open('https://twitter.com/intent/tweet?text=' + tweetText + '&url=' + tweetUrl, '_blank', 'noopener');
+                break;
+            }
+            case 'instagram': {
+                // Instagram doesn't support direct URL sharing — copy link + show toast
+                copyToClipboard(url);
+                showShareToast('<i class="fab fa-instagram"></i> Link copied! Paste it in your Instagram story or bio.');
+                break;
+            }
+            case 'facebook': {
+                const fbUrl = encodeURIComponent(url);
+                window.open('https://www.facebook.com/sharer/sharer.php?u=' + fbUrl, '_blank', 'noopener');
+                break;
+            }
+            case 'copy': {
+                copyToClipboard(url);
+                const icon = document.getElementById('copy-link-icon');
+                const btn = icon.closest('.share-btn');
+                icon.className = 'fas fa-check';
+                btn.classList.add('copied');
+                showShareToast('<i class="fas fa-check-circle"></i> Link copied to clipboard!');
+                setTimeout(() => {
+                    icon.className = 'fas fa-link';
+                    btn.classList.remove('copied');
+                }, 2500);
+                break;
+            }
+        }
+    }
+
+    function copyToClipboard(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text);
+        } else {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+        }
+    }
+
+    function showShareToast(msg) {
+        let toast = document.getElementById('share-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'share-toast';
+            toast.className = 'share-toast';
+            document.body.appendChild(toast);
+        }
+        toast.innerHTML = msg;
+        // Trigger reflow for re-animation
+        toast.classList.remove('show');
+        void toast.offsetWidth;
+        toast.classList.add('show');
+        setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+
+    // ============================================
+    // PDF ITINERARY DOWNLOAD
+    // ============================================
+    function downloadItineraryPDF() {
+        const btn = document.getElementById('btn-download-pdf');
+        const origHTML = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating PDF...';
+        btn.disabled = true;
+
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF('p', 'mm', 'a4');
+        const pageW = doc.internal.pageSize.getWidth();   // 210
+        const pageH = doc.internal.pageSize.getHeight();   // 297
+        const ml = 18;                                     // margin left
+        const mr = 18;                                     // margin right
+        const contentW = pageW - ml - mr;
+        let y = 0;
+
+        // Colors
+        const navy = [20, 45, 78];
+        const accent = [232, 121, 40];
+        const textDark = [33, 37, 41];
+        const textMid = [75, 85, 99];
+        const textLight = [148, 163, 184];
+        const lineGray = [220, 225, 230];
+        const bgLight = [245, 247, 250];
+        const white = [255, 255, 255];
+
+        const title = {{ package.title | tojson }};
+        const duration = {{ package.duration | tojson }};
+        const price = '{{ package.price }}';
+        const desc = {{ package.description | replace("\n", " ") | replace("\r", "") | tojson }};
+
+        // ─── Helper: Check if page break needed ───
+        function checkPage(needed) {
+            if (y + needed > pageH - 22) {
+                addFooter();
+                doc.addPage();
+                y = 18;
+            }
+        }
+
+        // ─── Helper: Section heading ───
+        function sectionHeading(icon, text) {
+            checkPage(16);
+            doc.setFillColor(...navy);
+            doc.roundedRect(ml, y, 5, 5, 1, 1, 'F');
+            doc.setTextColor(...white);
+            doc.setFontSize(7);
+            doc.setFont('helvetica', 'bold');
+            doc.text(icon, ml + 2.5, y + 3.5, { align: 'center' });
+
+            doc.setTextColor(...navy);
+            doc.setFontSize(13);
+            doc.setFont('helvetica', 'bold');
+            doc.text(text, ml + 9, y + 4.2);
+            y += 10;
+
+            // Accent underline
+            doc.setDrawColor(...accent);
+            doc.setLineWidth(0.6);
+            doc.line(ml, y - 2, ml + 35, y - 2);
+            doc.setDrawColor(...lineGray);
+            doc.setLineWidth(0.15);
+            doc.line(ml + 35, y - 2, pageW - mr, y - 2);
+            y += 2;
+        }
+
+        // ─── Helper: Thin divider ───
+        function thinDivider() {
+            doc.setDrawColor(...lineGray);
+            doc.setLineWidth(0.15);
+            doc.line(ml, y, pageW - mr, y);
+            y += 5;
+        }
+
+        // ─── Helper: Footer on current page ───
+        function addFooter() {
+            doc.setDrawColor(...lineGray);
+            doc.setLineWidth(0.2);
+            doc.line(ml, pageH - 14, pageW - mr, pageH - 14);
+            doc.setFontSize(7);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(...textLight);
+            doc.text('NammaKarnataka Tourism', ml, pageH - 9);
+            doc.text('www.nammakarnataka.com', pageW - mr, pageH - 9, { align: 'right' });
+        }
+
+        // ═══════════════════════════════════════════
+        // PAGE 1 — COVER HEADER
+        // ═══════════════════════════════════════════
+
+        // Full-width navy header band
+        doc.setFillColor(...navy);
+        doc.rect(0, 0, pageW, 50, 'F');
+
+        // Accent stripe at bottom of header
+        doc.setFillColor(...accent);
+        doc.rect(0, 50, pageW, 2, 'F');
+
+        // Brand name
+        doc.setTextColor(...white);
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        doc.text('NAMMA', ml, 14);
+        doc.setFont('helvetica', 'bold');
+        doc.text('KARNATAKA', ml + 17, 14);
+
+        // Tag
+        doc.setFontSize(7);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(180, 200, 230);
+        doc.text('TRAVEL ITINERARY', ml, 20);
+
+        // Package title
+        doc.setTextColor(...white);
+        doc.setFontSize(20);
+        doc.setFont('helvetica', 'bold');
+        const titleLines = doc.splitTextToSize(title, contentW - 5);
+        doc.text(titleLines, ml, 33);
+
+        // Right-aligned duration pill on header
+        doc.setFillColor(255, 255, 255, 0.15);
+        const durText = duration;
+        const durW = doc.getTextWidth(durText) + 10;
+        doc.setFillColor(255, 255, 255);
+        doc.setGState(new doc.GState({ opacity: 0.18 }));
+        doc.roundedRect(pageW - mr - durW - 2, 10, durW + 4, 8, 3, 3, 'F');
+        doc.setGState(new doc.GState({ opacity: 1 }));
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(255, 255, 255);
+        doc.text(durText, pageW - mr - durW / 2, 15.5, { align: 'center' });
+
+        y = 60;
+
+        // ─── Trip summary info boxes ───
+        const infoBoxW = contentW / 3;
+        const infoItems = [
+            { label: 'DURATION', value: duration, icon: 'H' },
+            { label: 'PRICE', value: String.fromCharCode(8377) + price + ' / person', icon: 'R' },
+            { label: 'LOCATION', value: {% if package.location and package.location.name %}{{ package.location.name | tojson }}{% else %}'Karnataka'{% endif %}, icon: 'L' }
+        ];
+        doc.setFillColor(...bgLight);
+        doc.roundedRect(ml, y, contentW, 16, 2, 2, 'F');
+        infoItems.forEach((item, i) => {
+            const bx = ml + i * infoBoxW;
+            // Label
+            doc.setFontSize(6.5);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(...textLight);
+            doc.text(item.label, bx + infoBoxW / 2, y + 5.5, { align: 'center' });
+            // Value
+            doc.setFontSize(9);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(...textDark);
+            doc.text(item.value, bx + infoBoxW / 2, y + 11.5, { align: 'center' });
+            // Vertical separator
+            if (i < infoItems.length - 1) {
+                doc.setDrawColor(...lineGray);
+                doc.setLineWidth(0.2);
+                doc.line(bx + infoBoxW, y + 3, bx + infoBoxW, y + 13);
+            }
+        });
+        y += 24;
+
+        // ═══════════════════════════════════════════
+        // OVERVIEW
+        // ═══════════════════════════════════════════
+        sectionHeading('i', 'Overview');
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(...textMid);
+        const descLines = doc.splitTextToSize(desc, contentW);
+        checkPage(descLines.length * 4 + 4);
+        doc.text(descLines, ml, y);
+        y += descLines.length * 4 + 8;
+
+        // ═══════════════════════════════════════════
+        // FEATURES & HIGHLIGHTS
+        // ═══════════════════════════════════════════
+        {% if package.features %}
+        sectionHeading(String.fromCharCode(9733), 'Features & Highlights');
+        const features = [{% for feature in package.features %}{{ feature | tojson }}{% if not loop.last %},{% endif %}{% endfor %}];
+        const fColW = contentW / 2;
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        features.forEach((feat, i) => {
+            const col = i % 2;
+            const row = Math.floor(i / 2);
+            if (col === 0) checkPage(6);
+            const fx = ml + col * fColW;
+            const fy = y + row * 6;
+            // Green check circle
+            doc.setFillColor(16, 185, 129);
+            doc.circle(fx + 2, fy - 1.2, 1.5, 'F');
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(6);
+            doc.setFont('helvetica', 'bold');
+            doc.text(String.fromCharCode(10003), fx + 2, fy - 0.5, { align: 'center' });
+            // Feature text
+            doc.setTextColor(...textMid);
+            doc.setFontSize(8.5);
+            doc.setFont('helvetica', 'normal');
+            doc.text(feat, fx + 6, fy);
+        });
+        y += Math.ceil(features.length / 2) * 6 + 8;
+        {% endif %}
+
+        // ═══════════════════════════════════════════
+        // DAY-WISE ITINERARY
+        // ═══════════════════════════════════════════
+        sectionHeading('D', 'Day-wise Itinerary');
+
+        {% for day in package.itinerary %}
+        (function() {
+            checkPage(28);
+            const dayNum = '{{ day.day }}';
+            const dayTitle = {{ day.title | tojson }};
+            const dayDesc = {{ day.desc | replace("\n", " ") | replace("\r", "") | tojson }};
+
+            // Timeline dot + vertical line
+            const dotX = ml + 4;
+            doc.setFillColor(...accent);
+            doc.circle(dotX, y + 1.5, 2.5, 'F');
+            doc.setTextColor(...white);
+            doc.setFontSize(6);
+            doc.setFont('helvetica', 'bold');
+            doc.text(dayNum, dotX, y + 2.2, { align: 'center' });
+
+            // Day title
+            doc.setTextColor(...textDark);
+            doc.setFontSize(11);
+            doc.setFont('helvetica', 'bold');
+            doc.text(dayTitle, ml + 12, y + 2.5);
+            y += 8;
+
+            // Day description in a light card
+            const dLines = doc.splitTextToSize(dayDesc, contentW - 16);
+            const cardH = dLines.length * 4 + 6;
+            checkPage(cardH + 4);
+
+            doc.setFillColor(...bgLight);
+            doc.roundedRect(ml + 10, y - 2, contentW - 10, cardH, 2, 2, 'F');
+
+            doc.setTextColor(...textMid);
+            doc.setFontSize(8.5);
+            doc.setFont('helvetica', 'normal');
+            doc.text(dLines, ml + 14, y + 2);
+            y += cardH + 4;
+
+            // Vertical timeline connector (draw after to go underneath next dot)
+            {% if not loop.last %}
+            doc.setDrawColor(...lineGray);
+            doc.setLineWidth(0.4);
+            doc.line(dotX, y - cardH - 4 + 6, dotX, y);
+            {% endif %}
+        })();
+        {% endfor %}
+        y += 4;
+
+        // ═══════════════════════════════════════════
+        // CLIMATE GUIDE
+        // ═══════════════════════════════════════════
+        {% if package.climate_info and (package.climate_info.best_season or package.climate_info.expected_temp or package.climate_info.terrain) %}
+        sectionHeading('C', 'Climate & Travel Guide');
+
+        // Draw a bordered info box
+        const climateItems = [];
+        {% if package.climate_info.best_season %}
+        climateItems.push({ label: 'Best Season', value: {{ package.climate_info.best_season | tojson }} });
+        {% endif %}
+        {% if package.climate_info.expected_temp %}
+        climateItems.push({ label: 'Expected Temp', value: {{ package.climate_info.expected_temp | tojson }} });
+        {% endif %}
+        {% if package.climate_info.terrain %}
+        climateItems.push({ label: 'Terrain', value: {{ package.climate_info.terrain | tojson }} });
+        {% endif %}
+        {% if package.climate_info.rainfall %}
+        climateItems.push({ label: 'Rainfall', value: {{ package.climate_info.rainfall | tojson }} });
+        {% endif %}
+
+        const climBoxH = Math.ceil(climateItems.length / 2) * 12 + 6;
+        checkPage(climBoxH + 10);
+        doc.setFillColor(239, 246, 255);
+        doc.setDrawColor(147, 197, 253);
+        doc.setLineWidth(0.3);
+        doc.roundedRect(ml, y, contentW, climBoxH, 3, 3, 'FD');
+
+        const cColW = contentW / 2;
+        climateItems.forEach((ci, i) => {
+            const col = i % 2;
+            const row = Math.floor(i / 2);
+            const cx = ml + 6 + col * cColW;
+            const cy = y + 6 + row * 12;
+            doc.setFontSize(7);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(...textLight);
+            doc.text(ci.label.toUpperCase(), cx, cy);
+            doc.setFontSize(9.5);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(...textDark);
+            doc.text(ci.value, cx, cy + 5.5);
+        });
+        y += climBoxH + 4;
+
+        {% if package.climate_info.weather_tips %}
+        checkPage(14);
+        doc.setFillColor(254, 252, 232);
+        doc.setDrawColor(253, 224, 71);
+        doc.setLineWidth(0.3);
+        const tipText = 'Packing Tips: ' + {{ package.climate_info.weather_tips | tojson }};
+        const tipLines = doc.splitTextToSize(tipText, contentW - 12);
+        const tipH = tipLines.length * 4 + 6;
+        doc.roundedRect(ml, y, contentW, tipH, 2, 2, 'FD');
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(120, 80, 0);
+        doc.text(tipLines, ml + 6, y + 5);
+        y += tipH + 6;
+        {% endif %}
+        {% endif %}
+
+        // ═══════════════════════════════════════════
+        // AGENCY / CONTACT INFO
+        // ═══════════════════════════════════════════
+        checkPage(20);
+        thinDivider();
+        doc.setFillColor(...bgLight);
+        doc.roundedRect(ml, y, contentW, 14, 2, 2, 'F');
+        doc.setFontSize(7);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(...textLight);
+        doc.text('ORGANIZED BY', ml + 5, y + 5);
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(...navy);
+        doc.text('NammaKarnataka Tourism', ml + 5, y + 11);
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(...textMid);
+        doc.text('Generated on ' + new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }), pageW - mr - 5, y + 11, { align: 'right' });
+
+        // ─── Add page numbers + footer to all pages ───
+        const totalPages = doc.internal.getNumberOfPages();
+        for (let p = 1; p <= totalPages; p++) {
+            doc.setPage(p);
+            addFooter();
+            // Page number pill at bottom-center
+            doc.setFontSize(7);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(...textLight);
+            doc.text('Page ' + p + ' of ' + totalPages, pageW / 2, pageH - 9, { align: 'center' });
+        }
+
+        // ─── Try adding hero image on first page ───
+        const heroImg = document.querySelector('#gallery-main img');
+        if (heroImg && heroImg.complete && heroImg.naturalWidth > 0) {
+            try {
+                html2canvas(heroImg, { useCORS: true, scale: 1.5, logging: false }).then(canvas => {
+                    const imgData = canvas.toDataURL('image/jpeg', 0.8);
+                    doc.setPage(1);
+                    // Rounded image box at top-right of header
+                    doc.addImage(imgData, 'JPEG', pageW - mr - 55, 8, 55, 35);
+                    // Border around the image
+                    doc.setDrawColor(...white);
+                    doc.setLineWidth(0.8);
+                    doc.roundedRect(pageW - mr - 55, 8, 55, 35, 2, 2, 'S');
+                    savePDF();
+                }).catch(() => savePDF());
+            } catch(e) { savePDF(); }
+        } else {
+            savePDF();
+        }
+
+        function savePDF() {
+            doc.save(title.replace(/[^a-zA-Z0-9]/g, '_') + '_Itinerary.pdf');
+            btn.innerHTML = origHTML;
+            btn.disabled = false;
+        }
+    }
+
+    // ============================================
+    // LOCAL TRUST GRAPH SCORE
+    // ============================================
+    (function() {
+        const widget = document.getElementById('trust-graph-widget');
+        if (!widget) return;
+
+        const lat = parseFloat(widget.dataset.lat);
+        const lng = parseFloat(widget.dataset.lng);
+        const tag = (widget.dataset.tag || '').trim();
+        if (!lat || !lng) return;
+
+        const loadingEl = document.getElementById('trust-loading');
+        const errorEl = document.getElementById('trust-error');
+        const contentEl = document.getElementById('trust-content');
+
+        const scoreBadge = document.getElementById('trust-score-badge');
+        const levelEl = document.getElementById('trust-level');
+        const focusEl = document.getElementById('trust-focus');
+        const safetyEl = document.getElementById('trust-safety');
+        const crowdEl = document.getElementById('trust-crowd');
+        const roadEl = document.getElementById('trust-road');
+        const medicalEl = document.getElementById('trust-medical');
+        const recommendationEl = document.getElementById('trust-recommendation');
+
+        const url = '/api/local-trust-score?lat=' + encodeURIComponent(lat) +
+            '&lng=' + encodeURIComponent(lng) +
+            '&tag=' + encodeURIComponent(tag);
+
+        fetch(url)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) throw new Error(data.error);
+
+                const score = Number(data.overall_score || 0);
+                const components = data.components || {};
+
+                scoreBadge.textContent = String(score);
+                scoreBadge.classList.remove('medium', 'low');
+                if (data.trust_color === 'medium') scoreBadge.classList.add('medium');
+                if (data.trust_color === 'low') scoreBadge.classList.add('low');
+
+                levelEl.textContent = data.trust_level || 'Trust unavailable';
+                focusEl.textContent = 'Focus Area: ' + (data.focus_area || 'General');
+
+                safetyEl.textContent = String(components.safety_score ?? '--');
+                crowdEl.textContent = String(components.crowd_score ?? '--');
+                roadEl.textContent = String(components.road_score ?? '--');
+                medicalEl.textContent = String(components.medical_score ?? '--');
+
+                recommendationEl.innerHTML = '<i class="fas fa-shield-alt"></i> <strong>Recommended action:</strong> ' +
+                    (data.recommendation || 'Travel with normal precautions.');
+
+                loadingEl.style.display = 'none';
+                contentEl.style.display = 'block';
+            })
+            .catch(err => {
+                console.error('Trust score fetch failed:', err);
+                loadingEl.style.display = 'none';
+                errorEl.style.display = 'block';
+            });
+    })();
+
+    // ============================================
+    // CLIMATE / WEATHER WIDGET
+    // ============================================
+    (function() {
+        const widget = document.getElementById('climate-widget');
+        if (!widget) return;
+
+        const lat = parseFloat(widget.dataset.lat);
+        const lng = parseFloat(widget.dataset.lng);
+        const place = widget.dataset.place;
+        if (!lat || !lng) return;
+
+        // WMO weather code to emoji + description
+        function weatherInfo(code) {
+            const map = {
+                0: ['☀️', 'Clear sky'],
+                1: ['🌤️', 'Mainly clear'], 2: ['⛅', 'Partly cloudy'], 3: ['☁️', 'Overcast'],
+                45: ['🌫️', 'Foggy'], 48: ['🌫️', 'Depositing rime fog'],
+                51: ['🌦️', 'Light drizzle'], 53: ['🌦️', 'Moderate drizzle'], 55: ['🌧️', 'Dense drizzle'],
+                56: ['🌧️', 'Freezing drizzle'], 57: ['🌧️', 'Heavy freezing drizzle'],
+                61: ['🌧️', 'Slight rain'], 63: ['🌧️', 'Moderate rain'], 65: ['🌧️', 'Heavy rain'],
+                66: ['🌧️', 'Freezing rain'], 67: ['🌧️', 'Heavy freezing rain'],
+                71: ['🌨️', 'Slight snowfall'], 73: ['🌨️', 'Moderate snowfall'], 75: ['❄️', 'Heavy snowfall'],
+                77: ['❄️', 'Snow grains'],
+                80: ['🌦️', 'Slight showers'], 81: ['🌧️', 'Moderate showers'], 82: ['⛈️', 'Violent showers'],
+                85: ['🌨️', 'Snow showers'], 86: ['🌨️', 'Heavy snow showers'],
+                95: ['⛈️', 'Thunderstorm'], 96: ['⛈️', 'Thunderstorm with hail'], 99: ['⛈️', 'Severe thunderstorm']
+            };
+            return map[code] || ['🌡️', 'Unknown'];
+        }
+
+        function getDayName(dateStr) {
+            const d = new Date(dateStr + 'T00:00:00');
+            const today = new Date();
+            today.setHours(0,0,0,0);
+            const tomorrow = new Date(today);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            if (d.getTime() === today.getTime()) return 'Today';
+            if (d.getTime() === tomorrow.getTime()) return 'Tomorrow';
+            return d.toLocaleDateString('en-IN', { weekday: 'short' });
+        }
+
+        function getTravelTip(code, temp, humidity, windSpeed) {
+            let tips = [];
+            if (code >= 95) tips.push('⚡ Thunderstorms expected — avoid outdoor activities and carry rain gear.');
+            else if (code >= 61) tips.push('🌧️ Rainy conditions — pack an umbrella and waterproof jacket.');
+            else if (code >= 51) tips.push('🌦️ Light drizzle expected — a light rain jacket is recommended.');
+            else if (code >= 71) tips.push('❄️ Snowfall expected — wear warm layers and winter boots.');
+            else if (code === 0 || code === 1) tips.push('☀️ Beautiful clear weather — perfect for sightseeing!');
+            else if (code <= 3) tips.push('⛅ Partly cloudy — comfortable weather for outdoor exploration.');
+
+            if (temp > 35) tips.push('🥵 High temperatures — stay hydrated and use sunscreen.');
+            else if (temp > 30) tips.push('🌡️ Warm weather — light cotton clothing recommended.');
+            else if (temp < 15) tips.push('🧥 Cool weather — carry a warm jacket or sweater.');
+            else if (temp < 10) tips.push('🥶 Cold conditions — dress in warm layers.');
+
+            if (humidity > 80) tips.push('💧 High humidity — wear breathable fabrics.');
+            if (windSpeed > 30) tips.push('💨 Strong winds expected — secure loose items.');
+
+            return tips.length > 0 ? tips.join(' ') : '✅ Weather looks pleasant — enjoy your trip!';
+        }
+
+        function applyMonsoonMagic(current, daily, placeName) {
+            const panel = document.getElementById('monsoon-magic-panel');
+            const titleEl = document.getElementById('monsoon-magic-title');
+            const subtitleEl = document.getElementById('monsoon-magic-subtitle');
+            const recGrid = document.getElementById('monsoon-magic-rec-grid');
+            if (!panel || !titleEl || !subtitleEl || !recGrid) return;
+
+            const rainArray = Array.isArray(daily.precipitation_probability_max)
+                ? daily.precipitation_probability_max.slice(0, 3)
+                : [];
+            const maxRainChance = rainArray.length ? Math.max(...rainArray) : 0;
+            const rainyNow = (current.weather_code >= 51 && current.weather_code <= 67) || current.weather_code >= 80;
+
+            let mode = 'clear';
+            if (rainyNow || maxRainChance >= 55) mode = 'monsoon';
+            else if (maxRainChance >= 30) mode = 'drizzly';
+
+            document.body.classList.remove('monsoon-magic-mode', 'drizzly-magic-mode');
+            const widgetEl = document.getElementById('climate-widget');
+            if (widgetEl) widgetEl.classList.remove('climate-widget-monsoon', 'climate-widget-drizzly');
+
+            let title = '';
+            let subtitle = '';
+            let recs = [];
+
+            if (mode === 'monsoon') {
+                document.body.classList.add('monsoon-magic-mode');
+                if (widgetEl) widgetEl.classList.add('climate-widget-monsoon');
+
+                title = 'Monsoon Magic Mode Active';
+                subtitle = `Rain likely around ${placeName}. Best picks are curated for wet-weather comfort and wow views.`;
+                recs = [
+                    { icon: 'fa-water', title: 'Waterfall Routes', desc: 'Chasing lush waterfalls is perfect right now; prioritize scenic rain-fed viewpoints.' },
+                    { icon: 'fa-landmark', title: 'Indoor Heritage Trails', desc: 'Choose palace, museum, and temple circuits to stay weather-safe and cultural.' },
+                    { icon: 'fa-mug-hot', title: 'Cafe-Heavy Plans', desc: 'Balance your itinerary with cozy cafe stops between short outdoor windows.' },
+                    { icon: 'fa-umbrella', title: 'Rain Ready Essentials', desc: 'Carry ponchos, quick-dry shoes, and waterproof pouches for phones and documents.' },
+                ];
+            } else if (mode === 'drizzly') {
+                document.body.classList.add('drizzly-magic-mode');
+                if (widgetEl) widgetEl.classList.add('climate-widget-drizzly');
+
+                title = 'Light Rain Flex Mode';
+                subtitle = `Intermittent showers expected in ${placeName}. Mix outdoor slots with sheltered experiences.`;
+                recs = [
+                    { icon: 'fa-cloud-sun-rain', title: 'Hybrid Day Plan', desc: 'Start with outdoor spots early; reserve indoor attractions for afternoon showers.' },
+                    { icon: 'fa-camera', title: 'Misty Photo Windows', desc: 'Cloud cover gives soft light for portraits, forts, ghats, and hill viewpoints.' },
+                    { icon: 'fa-shoe-prints', title: 'Comfort First', desc: 'Use anti-slip footwear and keep one backup dry layer for evening transitions.' },
+                ];
+            } else {
+                title = 'Clear-Sky Explorer Mode';
+                subtitle = `Weather looks favorable in ${placeName}. Outdoor-heavy itineraries are recommended.`;
+                recs = [
+                    { icon: 'fa-hiking', title: 'Outdoor Priority', desc: 'Great time for treks, viewpoints, and long scenic drives.' },
+                    { icon: 'fa-sun', title: 'Sun Safety', desc: 'Carry sunscreen, cap, and hydration for full-day exploration.' },
+                    { icon: 'fa-route', title: 'Long-Route Day Trips', desc: 'Use clear weather windows for multi-stop itineraries and sunset points.' },
+                ];
+            }
+
+            titleEl.innerHTML = `<i class="fas fa-magic" style="margin-right:6px;"></i>${title}`;
+            subtitleEl.textContent = subtitle;
+            recGrid.innerHTML = recs.map(r => `
+                <div class="monsoon-rec-card">
+                    <div class="monsoon-rec-icon"><i class="fas ${r.icon}"></i></div>
+                    <div class="monsoon-rec-copy">
+                        <h4>${r.title}</h4>
+                        <p>${r.desc}</p>
+                    </div>
+                </div>
+            `).join('');
+            panel.style.display = 'block';
+        }
+
+        fetch(`/api/weather?lat=${lat}&lng=${lng}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) throw new Error(data.error);
+
+                const c = data.current;
+                const d = data.daily;
+                const [icon, desc] = weatherInfo(c.weather_code);
+
+                // Current weather
+                document.getElementById('climate-icon').textContent = icon;
+                document.getElementById('climate-temp').textContent = Math.round(c.temperature_2m) + '°C';
+                document.getElementById('climate-desc').textContent = desc + ' in ' + place;
+                document.getElementById('climate-feels').textContent = Math.round(c.apparent_temperature) + '°C';
+                document.getElementById('climate-humidity').textContent = c.relative_humidity_2m + '%';
+                document.getElementById('climate-wind').textContent = Math.round(c.wind_speed_10m) + ' km/h';
+
+                // 7-day forecast
+                const forecastEl = document.getElementById('climate-forecast');
+                let forecastHTML = '';
+                for (let i = 0; i < d.time.length; i++) {
+                    const [fIcon] = weatherInfo(d.weather_code[i]);
+                    const rain = d.precipitation_probability_max[i];
+                    forecastHTML += `
+                        <div class="forecast-day">
+                            <div class="f-day">${getDayName(d.time[i])}</div>
+                            <div class="f-icon">${fIcon}</div>
+                            <div class="f-temps">${Math.round(d.temperature_2m_max[i])}° <span>${Math.round(d.temperature_2m_min[i])}°</span></div>
+                            ${rain > 0 ? `<div class="f-rain"><i class="fas fa-tint"></i>${rain}%</div>` : ''}
+                        </div>`;
+                }
+                forecastEl.innerHTML = forecastHTML;
+
+                // Travel tip
+                const tip = getTravelTip(c.weather_code, c.temperature_2m, c.relative_humidity_2m, c.wind_speed_10m);
+                document.getElementById('climate-tip').innerHTML = '<i class="fas fa-lightbulb"></i> <strong>Travel Tip:</strong> ' + tip;
+
+                // Monsoon Magic Mode
+                applyMonsoonMagic(c, d, place);
+
+                // Show content, hide loading
+                document.getElementById('climate-loading').style.display = 'none';
+                document.getElementById('climate-content').style.display = 'block';
+            })
+            .catch(err => {
+                console.error('Weather fetch failed:', err);
+                document.getElementById('climate-loading').style.display = 'none';
+                document.getElementById('climate-error').style.display = 'block';
+            });
+    })();
+
+    // ============================================
+    // SUNRISE / SUNSET / GOLDEN HOUR
+    // ============================================
+    (function() {
+        const gWidget = document.getElementById('golden-hour-widget');
+        if (!gWidget) return;
+
+        const lat = parseFloat(gWidget.dataset.lat);
+        const lng = parseFloat(gWidget.dataset.lng);
+        if (!lat || !lng) return;
+
+        function toLocal(isoStr) {
+            const d = new Date(isoStr);
+            return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
+        }
+
+        function addMinutes(isoStr, mins) {
+            const d = new Date(isoStr);
+            d.setMinutes(d.getMinutes() + mins);
+            return d;
+        }
+
+        function fmtTime(date) {
+            return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
+        }
+
+        fetch('/api/sun-times?lat=' + lat + '&lng=' + lng)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) throw new Error(data.error);
+
+                document.getElementById('sun-rise').textContent = toLocal(data.sunrise);
+                document.getElementById('sun-set').textContent = toLocal(data.sunset);
+                document.getElementById('solar-noon').textContent = toLocal(data.solar_noon);
+                document.getElementById('twilight-end').textContent = toLocal(data.civil_twilight_end);
+
+                // Golden hour: ~first hour after sunrise, ~last hour before sunset
+                const sunriseEnd = addMinutes(data.sunrise, 60);
+                document.getElementById('golden-am').textContent = toLocal(data.sunrise) + ' \u2013 ' + fmtTime(sunriseEnd);
+
+                const sunsetStart = addMinutes(data.sunset, -60);
+                document.getElementById('golden-pm').textContent = fmtTime(sunsetStart) + ' \u2013 ' + toLocal(data.sunset);
+
+                // Day length
+                const diff = (new Date(data.sunset) - new Date(data.sunrise)) / 1000;
+                const hrs = Math.floor(diff / 3600);
+                const mins = Math.floor((diff % 3600) / 60);
+                document.getElementById('day-length').textContent = hrs + 'h ' + mins + 'm';
+
+                document.getElementById('golden-loading').style.display = 'none';
+                document.getElementById('golden-content').style.display = 'block';
+            })
+            .catch(() => {
+                document.getElementById('golden-loading').style.display = 'none';
+                document.getElementById('golden-error').style.display = 'block';
+            });
+    })();
+
+    // ============================================
+    // NEARBY RESTAURANTS
+    // ============================================
+    (function() {
+        const rWidget = document.getElementById('restaurants-widget');
+        if (!rWidget) return;
+
+        const lat = parseFloat(rWidget.dataset.lat);
+        const lng = parseFloat(rWidget.dataset.lng);
+        if (!lat || !lng) return;
+
+        function typeIcon(type) {
+            if (type === 'cafe') return '<i class="fas fa-coffee"></i>';
+            if (type === 'fast_food') return '<i class="fas fa-hamburger"></i>';
+            return '<i class="fas fa-utensils"></i>';
+        }
+
+        function typeLabel(type) {
+            if (type === 'cafe') return 'Café';
+            if (type === 'fast_food') return 'Fast Food';
+            return 'Restaurant';
+        }
+
+        function formatCuisine(cuisine) {
+            if (!cuisine) return '';
+            return cuisine.split(';').map(c => c.trim().replace(/_/g, ' ')).map(c =>
+                c.charAt(0).toUpperCase() + c.slice(1)
+            ).join(', ');
+        }
+
+        fetch(`/api/nearby-restaurants?lat=${lat}&lng=${lng}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) throw new Error(data.error);
+
+                const restaurants = data.restaurants || [];
+                if (restaurants.length === 0) {
+                    document.getElementById('restaurants-loading').style.display = 'none';
+                    document.getElementById('restaurants-content').style.display = 'block';
+                    document.getElementById('restaurants-grid').innerHTML =
+                        '<div class="restaurants-empty"><i class="fas fa-search"></i> No restaurants found nearby. Try expanding your search area.</div>';
+                    return;
+                }
+
+                let html = '';
+                restaurants.forEach(r => {
+                    const cuisine = formatCuisine(r.cuisine);
+                    const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${r.lat},${r.lng}`;
+                    html += `
+                    <div class="restaurant-card">
+                        <div class="restaurant-card-header">
+                            <div class="restaurant-card-icon ${r.type}">
+                                ${typeIcon(r.type)}
+                            </div>
+                            <div>
+                                <div class="restaurant-card-name">${r.name}</div>
+                                <div class="restaurant-card-type">${typeLabel(r.type)}</div>
+                            </div>
+                        </div>
+                        <div class="restaurant-card-details">
+                            ${cuisine ? `<span class="restaurant-tag"><i class="fas fa-fire"></i> ${cuisine}</span>` : ''}
+                            ${r.vegetarian ? '<span class="restaurant-tag veg"><i class="fas fa-leaf"></i> Veg Friendly</span>' : ''}
+                            ${r.opening_hours ? `<span class="restaurant-tag"><i class="fas fa-clock"></i> ${r.opening_hours}</span>` : ''}
+                            ${r.phone ? `<span class="restaurant-tag"><i class="fas fa-phone"></i> ${r.phone}</span>` : ''}
+                        </div>
+                        <div class="restaurant-card-actions">
+                            <a href="${mapsUrl}" target="_blank" rel="noopener"><i class="fas fa-directions"></i> Directions</a>
+                            ${r.website ? `<a href="${r.website}" target="_blank" rel="noopener"><i class="fas fa-globe"></i> Website</a>` : ''}
+                        </div>
+                    </div>`;
+                });
+                document.getElementById('restaurants-grid').innerHTML = html;
+                document.getElementById('restaurants-loading').style.display = 'none';
+                document.getElementById('restaurants-content').style.display = 'block';
+
+                // Plot restaurants on the map
+                if (pkgMap && restaurants.length > 0) {
+                    var restaurantIcon = L.divIcon({
+                        className: '',
+                        html: '<div class="restaurant-map-marker"><i class="fas fa-utensils"></i></div>',
+                        iconSize: [28, 28],
+                        iconAnchor: [14, 28],
+                        popupAnchor: [0, -28]
+                    });
+                    var cafeIcon = L.divIcon({
+                        className: '',
+                        html: '<div class="restaurant-map-marker" style="background:linear-gradient(135deg,#7c3aed,#a78bfa);"><i class="fas fa-coffee"></i></div>',
+                        iconSize: [28, 28],
+                        iconAnchor: [14, 28],
+                        popupAnchor: [0, -28]
+                    });
+                    var fastFoodIcon = L.divIcon({
+                        className: '',
+                        html: '<div class="restaurant-map-marker" style="background:linear-gradient(135deg,#dc2626,#f87171);"><i class="fas fa-hamburger"></i></div>',
+                        iconSize: [28, 28],
+                        iconAnchor: [14, 28],
+                        popupAnchor: [0, -28]
+                    });
+                    restaurants.forEach(function(r) {
+                        if (!r.lat || !r.lng) return;
+                        var icon = r.type === 'cafe' ? cafeIcon : (r.type === 'fast_food' ? fastFoodIcon : restaurantIcon);
+                        var mUrl = 'https://www.google.com/maps/dir/?api=1&destination=' + r.lat + ',' + r.lng;
+                        L.marker([r.lat, r.lng], { icon: icon }).addTo(pkgMap)
+                            .bindPopup(
+                                '<div style="font-family:Inter,sans-serif;min-width:140px;">' +
+                                '<b style="font-size:13px;">' + r.name + '</b><br>' +
+                                '<span style="font-size:11px;color:#666;">' + typeLabel(r.type) + '</span>' +
+                                (r.cuisine ? '<br><span style="font-size:11px;color:#888;">' + formatCuisine(r.cuisine) + '</span>' : '') +
+                                '<br><a href="' + mUrl + '" target="_blank" rel="noopener" style="font-size:11px;color:#008cff;font-weight:600;">Get Directions &rarr;</a>' +
+                                '</div>',
+                                { maxWidth: 200 }
+                            );
+                    });
+                }
+            })
+            .catch(err => {
+                console.error('Restaurant fetch failed:', err);
+                document.getElementById('restaurants-loading').style.display = 'none';
+                document.getElementById('restaurants-error').style.display = 'block';
+            });
+    })();
+
+    // ============================================
+    // REVIEWS / TRAVEL STORIES
+    // ============================================
+    const reviewSection = document.getElementById('reviews-section');
+    const pkgId = reviewSection ? reviewSection.dataset.pkgId : null;
+    let selectedRating = 0;
+
+    // Star rating selector
+    const starSelect = document.getElementById('star-select');
+    if (starSelect) {
+        starSelect.querySelectorAll('i').forEach(star => {
+            star.addEventListener('mouseenter', function() {
+                highlightStars(parseInt(this.dataset.val));
+            });
+            star.addEventListener('mouseleave', function() {
+                highlightStars(selectedRating);
+            });
+            star.addEventListener('click', function() {
+                selectedRating = parseInt(this.dataset.val);
+                document.getElementById('review-rating').value = selectedRating;
+                highlightStars(selectedRating);
+            });
+        });
+    }
+
+    function highlightStars(n) {
+        if (!starSelect) return;
+        starSelect.querySelectorAll('i').forEach((s, i) => {
+            s.className = i < n ? 'fas fa-star' : 'far fa-star';
+        });
+    }
+
+    function toggleReviewForm() {
+        const wrapper = document.getElementById('review-form-wrapper');
+        wrapper.style.display = wrapper.style.display === 'none' ? 'block' : 'none';
+        if (wrapper.style.display === 'block') {
+            wrapper.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }
+
+    function submitReview(e) {
+        e.preventDefault();
+        if (selectedRating === 0) {
+            alert('Please select a star rating');
+            return;
+        }
+        const form = document.getElementById('review-form');
+        const fd = new FormData(form);
+        const btn = form.querySelector('.review-submit-btn');
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Posting...';
+        btn.disabled = true;
+
+        fetch('/api/reviews/' + pkgId, { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) {
+                    alert(data.error);
+                    btn.innerHTML = '<i class="fas fa-paper-plane"></i> Post Review';
+                    btn.disabled = false;
+                    return;
+                }
+                form.reset();
+                selectedRating = 0;
+                highlightStars(0);
+                document.getElementById('review-form-wrapper').style.display = 'none';
+                loadReviews();
+                btn.innerHTML = '<i class="fas fa-paper-plane"></i> Post Review';
+                btn.disabled = false;
+            })
+            .catch(() => {
+                alert('Failed to post review. Please try again.');
+                btn.innerHTML = '<i class="fas fa-paper-plane"></i> Post Review';
+                btn.disabled = false;
+            });
+    }
+
+    function renderStars(rating) {
+        let stars = '';
+        for (let i = 1; i <= 5; i++) {
+            stars += i <= rating ? '<i class="fas fa-star"></i>' : '<i class="far fa-star"></i>';
+        }
+        return stars;
+    }
+
+    function loadReviews() {
+        if (!pkgId) return;
+        fetch('/api/reviews/' + pkgId)
+            .then(r => r.json())
+            .then(data => {
+                const { reviews, stats } = data;
+                // Stats
+                if (stats.total > 0) {
+                    document.getElementById('review-stats').style.display = 'flex';
+                    document.getElementById('review-avg').textContent = stats.average;
+                    document.getElementById('review-avg-stars').innerHTML = renderStars(Math.round(stats.average));
+                    document.getElementById('review-total').textContent = stats.total + ' review' + (stats.total !== 1 ? 's' : '');
+
+                    let barsHTML = '';
+                    for (let i = 5; i >= 1; i--) {
+                        const pct = stats.total > 0 ? (stats.counts[i] / stats.total * 100) : 0;
+                        barsHTML += `
+                            <div class="rating-bar-row">
+                                <span class="rating-bar-label">${i} <i class="fas fa-star"></i></span>
+                                <div class="rating-bar-track"><div class="rating-bar-fill" style="width:${pct}%"></div></div>
+                                <span class="rating-bar-count">${stats.counts[i]}</span>
+                            </div>`;
+                    }
+                    document.getElementById('review-bars').innerHTML = barsHTML;
+                }
+
+                // Reviews list
+                const listEl = document.getElementById('reviews-list');
+                if (reviews.length === 0) {
+                    listEl.innerHTML = '<div class="reviews-empty"><i class="fas fa-comment-dots"></i> No reviews yet. Be the first to share your experience!</div>';
+                    return;
+                }
+
+                let html = '';
+                reviews.forEach(r => {
+                    const photos = (r.photos || []).map(p =>
+                        `<img src="${p}" alt="Review photo" class="review-photo" onclick="window.open('${p}','_blank')">`
+                    ).join('');
+
+                    html += `
+                    <div class="review-card">
+                        <div class="review-card-header">
+                            <div class="review-avatar">${(r.user_name || 'A')[0].toUpperCase()}</div>
+                            <div class="review-meta">
+                                <div class="review-author">${r.user_name || 'Anonymous'}</div>
+                                <div class="review-date">${r.date || ''}${r.trip_type ? ' · ' + r.trip_type : ''}</div>
+                            </div>
+                            <div class="review-card-stars">${renderStars(r.rating)}</div>
+                        </div>
+                        <h4 class="review-card-title">${r.title}</h4>
+                        <p class="review-card-content">${r.content}</p>
+                        ${photos ? '<div class="review-photos">' + photos + '</div>' : ''}
+                    </div>`;
+                });
+                listEl.innerHTML = html;
+            })
+            .catch(() => {
+                document.getElementById('reviews-list').innerHTML =
+                    '<div class="reviews-empty">Unable to load reviews.</div>';
+            });
+    }
+
+    // Load reviews on page load
+    if (pkgId) loadReviews();
+
+</script>
+{% endblock %}
