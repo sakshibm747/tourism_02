@@ -3850,4 +3850,146 @@ body.drizzly-magic-mode {
         grid-template-columns: 1fr 1fr;
     }
 }
+
+/* ============================================
+   GLOBAL PHONE OPTIMIZATION
+   ============================================ */
+@media (max-width: 900px) {
+    body {
+        overflow-x: hidden;
+    }
+
+    .navbar {
+        padding: 10px 0;
+    }
+
+    .nav-container {
+        padding: 0 12px;
+    }
+
+    .brand-logo {
+        font-size: 21px;
+    }
+
+    .footer {
+        padding: 40px 0 20px;
+    }
+
+    .footer-container {
+        gap: 22px;
+        padding: 0 14px;
+    }
+
+    .portal-container {
+        width: calc(100% - 24px);
+        max-width: 520px;
+        margin: 18px auto !important;
+        padding: 18px !important;
+    }
+
+    .search-results-container {
+        margin: 20px auto;
+        padding: 0 12px;
+    }
+
+    .search-results-header h1 {
+        font-size: 24px;
+        line-height: 1.25;
+    }
+
+    .search-results-grid {
+        grid-template-columns: 1fr;
+        gap: 14px;
+    }
+
+    .search-empty {
+        padding: 50px 0;
+    }
+
+    .profile-layout {
+        flex-direction: column;
+        gap: 14px;
+        margin: 20px auto !important;
+        padding: 0 12px !important;
+    }
+
+    .profile-sidebar {
+        width: 100% !important;
+        padding: 16px !important;
+    }
+
+    .profile-main {
+        width: 100%;
+        padding: 16px !important;
+    }
+
+    .profile-booking-card {
+        flex-direction: column;
+        align-items: flex-start !important;
+        gap: 10px;
+        padding: 14px !important;
+    }
+
+    .profile-booking-meta {
+        text-align: left !important;
+        width: 100%;
+    }
+
+    .stories-cta-wrap {
+        padding: 0 12px !important;
+    }
+
+    .stories-cta-card {
+        padding: 24px 18px !important;
+        gap: 14px !important;
+    }
+
+    .stories-cta-content h2 {
+        font-size: 22px !important;
+        line-height: 1.3;
+    }
+
+    .stories-cta-content p {
+        font-size: 14px !important;
+    }
+
+    .stories-cta-action {
+        width: 100%;
+        display: inline-flex !important;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+    }
+
+    .package-map-wrap {
+        height: 300px !important;
+    }
+
+    .managed-packages-wrap,
+    div[style*='overflow-x: auto'] {
+        -webkit-overflow-scrolling: touch;
+    }
+}
+
+@media (max-width: 520px) {
+    .search-results-header h1 {
+        font-size: 21px;
+    }
+
+    .search-results-count {
+        font-size: 13px;
+        margin-bottom: 16px;
+    }
+
+    .stories-cta-content h2 {
+        font-size: 20px !important;
+    }
+
+    .package-map-wrap {
+        height: 240px !important;
+    }
+
+    .portal-container h2#form-title {
+        font-size: 22px !important;
+    }
 }

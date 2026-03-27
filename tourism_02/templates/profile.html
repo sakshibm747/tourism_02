@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div style="max-width: 1200px; margin: 40px auto; padding: 0 20px; display: flex; gap: 30px; align-items: flex-start;">
+<div class="profile-layout" style="max-width: 1200px; margin: 40px auto; padding: 0 20px; display: flex; gap: 30px; align-items: flex-start;">
 
     <!-- Sidebar / User Info -->
-    <div
+    <div class="profile-sidebar"
         style="width: 300px; background: var(--white); padding: 25px; border-radius: var(--border-radius); box-shadow: var(--box-shadow); border: var(--glass-border);">
         <div style="text-align: center; border-bottom: 1px solid #eee; padding-bottom: 20px; margin-bottom: 20px;">
             <div
@@ -28,14 +28,14 @@
     </div>
 
     <!-- Main Content / Booking History -->
-    <div
+    <div class="profile-main"
         style="flex: 1; background: var(--white); padding: 30px; border-radius: var(--border-radius); box-shadow: var(--box-shadow); border: var(--glass-border);">
         <h2 style="font-size: 24px; margin-bottom: 25px; font-weight: 800; color: #000;">My Trips</h2>
 
         {% if user.bookings %}
-        <div style="display: flex; flex-direction: column; gap: 20px;">
+        <div class="profile-bookings" style="display: flex; flex-direction: column; gap: 20px;">
             {% for booking in user.bookings %}
-            <div
+            <div class="profile-booking-card"
                 style="border: 1px solid #e0e0e0; border-radius: 12px; padding: 20px; display: flex; justify-content: space-between; align-items: center; background: {% if booking.status == 'pending' %}#fffbeb{% elif booking.status == 'approved' %}#f0fdf4{% elif booking.status == 'rejected' %}#fef2f2{% else %}#fafbfc{% endif %};">
                 <div>
                     <span
@@ -48,7 +48,7 @@
                     <p style="color: var(--text-light); font-size: 13px; margin-top: 4px;"><i class="fas fa-users"></i> {{ booking.travelers }} traveler{{ 's' if booking.travelers != 1 else '' }}</p>
                 </div>
 
-                <div style="text-align: right;">
+                <div class="profile-booking-meta" style="text-align: right;">
                     <div style="font-size: 20px; font-weight: 700; color: #000; margin-bottom: 8px;">₹{{ booking.amount }} × {{ booking.travelers }}</div>
                     {% if booking.status == 'pending' %}
                     <span
