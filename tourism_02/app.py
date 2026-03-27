@@ -121,29 +121,49 @@ def save_uploaded_files(files, allowed_ext):
 # --- Firebase Initialization (Realtime Database — free Spark plan) ---
 FIREBASE_ENABLED = False
 
-cred_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'serviceAccountKey.json')
-if os.path.exists(cred_path):
-    try:
-        # Read project_id from the service account key to build the DB URL
-        with open(cred_path, 'r') as f:
-            sa_info = json.load(f)
+def _load_service_account_info():
+    """Load Firebase service account from file (local) or env (Render)."""
+    cred_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'serviceAccountKey.json')
+    if os.path.exists(cred_path):
+        with open(cred_path, 'r', encoding='utf-8') as f:
+            return json.load(f), 'file'
+
+    # Prefer explicit JSON env var for cloud deployments.
+    raw_json = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON', '').strip()
+    if not raw_json:
+        raw_json = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON', '').strip()
+
+    if raw_json:
+        return json.loads(raw_json), 'env'
+
+    return None, ''
+
+
+def _resolve_database_url(project_id):
+    """Choose DB URL from env/config; fallback to regional default format."""
+    return (
+        os.environ.get('FIREBASE_DATABASE_URL', '').strip()
+        or FIREBASE_WEB_CONFIG.get('databaseURL', '').strip()
+        or f'https://{project_id}-default-rtdb.asia-southeast1.firebasedatabase.app'
+    )
+
+
+try:
+    sa_info, source = _load_service_account_info()
+    if sa_info:
         project_id = sa_info.get('project_id', 'my-project')
-        
-        # Try regional URL format (asia-southeast1 is common for Indian projects)
-        db_url = f'https://{project_id}-default-rtdb.asia-southeast1.firebasedatabase.app'
-        
-        cred = credentials.Certificate(cred_path)
+        db_url = _resolve_database_url(project_id)
+        cred = credentials.Certificate(sa_info)
         firebase_admin.initialize_app(cred, {'databaseURL': db_url})
         FIREBASE_ENABLED = True
-        print(f"✅ Firebase Realtime Database initialized!")
+        print(f"✅ Firebase Realtime Database initialized via {source}.")
         print(f"   Database URL: {db_url}")
-    except Exception as e:
-        print(f"⚠️  Firebase initialization failed: {e}")
-        print("   Running in MOCK mode (in-memory database)")
-else:
-    print("ℹ️  serviceAccountKey.json not found. Running in MOCK mode.")
-    print("   Place your Firebase service account key at:")
-    print(f"   {cred_path}")
+    else:
+        print("ℹ️  Firebase credentials not found. Running in MOCK mode.")
+        print("   Add FIREBASE_SERVICE_ACCOUNT_JSON on Render to enable realtime DB writes.")
+except Exception as e:
+    print(f"⚠️  Firebase initialization failed: {e}")
+    print("   Running in MOCK mode (in-memory database)")
 
 # Make session data available to all templates for dynamic navbar
 @app.context_processor
