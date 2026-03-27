@@ -375,6 +375,9 @@ MOCK_DATABASE = {
     }
 }
 
+# Keep fallback mode empty so agencies start with no preloaded packages.
+MOCK_DATABASE['packages'] = {}
+
 # --- Firebase Realtime Database Helpers ---
 # These functions abstract all DB access. They use Realtime Database when available,
 # otherwise fall back to the in-memory MOCK_DATABASE.
