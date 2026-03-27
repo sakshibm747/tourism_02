@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: tourism-02
+    env: python
+    rootDir: tourism_02
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
