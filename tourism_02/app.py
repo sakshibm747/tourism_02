@@ -148,6 +148,35 @@ def _resolve_database_url(project_id):
     )
 
 
+def _iter_valid_user_records(all_users):
+    """Yield (key, user_dict) entries while skipping null/invalid nodes."""
+    if not all_users or not isinstance(all_users, dict):
+        return
+    for uid, udata in all_users.items():
+        if isinstance(udata, dict):
+            yield uid, udata
+
+
+def _touch_last_login(user_key):
+    """Persist last-login metadata for observability and audits."""
+    now_ts = int(time.time())
+    now_iso = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    payload = {
+        'last_login_ts': now_ts,
+        'last_login_at': now_iso,
+    }
+
+    if FIREBASE_ENABLED:
+        try:
+            firebase_db.reference(f'/users/{user_key}').update(payload)
+        except Exception as e:
+            print(f"⚠️  Firebase last-login update error: {e}")
+    else:
+        user_obj = MOCK_DATABASE.get('users', {}).get(user_key)
+        if isinstance(user_obj, dict):
+            user_obj.update(payload)
+
+
 try:
     sa_info, source = _load_service_account_info()
     if sa_info:
@@ -468,6 +497,7 @@ def db_add_package(pkg_id, pkg_data):
             return True
         except Exception as e:
             print(f"⚠️  Firebase write error: {e}")
+            return False
     MOCK_DATABASE['packages'][pkg_id] = pkg_data
     return True
 
@@ -480,6 +510,7 @@ def db_update_package(pkg_id, pkg_data):
             return True
         except Exception as e:
             print(f"⚠️  Firebase update error: {e}")
+            return False
     if pkg_id in MOCK_DATABASE['packages']:
         MOCK_DATABASE['packages'][pkg_id].update(pkg_data)
     return True
@@ -493,6 +524,7 @@ def db_delete_package(pkg_id):
             return True
         except Exception as e:
             print(f"⚠️  Firebase delete error: {e}")
+            return False
     if pkg_id in MOCK_DATABASE['packages']:
         del MOCK_DATABASE['packages'][pkg_id]
     return True
@@ -1178,7 +1210,12 @@ def get_nearby_restaurants():
         cache_set(cache_key, result, _CACHE_TTL['restaurants'])
         return jsonify(result)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        # Overpass occasionally rate-limits; keep UI functional with empty data.
+        print(f"⚠️  Nearby restaurants fallback: {e}")
+        return jsonify({
+            'restaurants': [],
+            'warning': 'Restaurant data temporarily unavailable. Please try again later.'
+        })
 
 
 @app.route('/api/local-trust-score')
@@ -1236,9 +1273,15 @@ def get_local_trust_score():
         );
         out center 80;
         """
-        osm_resp = req.post('https://overpass-api.de/api/interpreter', data={'data': overpass_query}, timeout=14)
-        osm_resp.raise_for_status()
-        elements = (osm_resp.json() or {}).get('elements', [])
+        elements = []
+        osm_warning = ''
+        try:
+            osm_resp = req.post('https://overpass-api.de/api/interpreter', data={'data': overpass_query}, timeout=14)
+            osm_resp.raise_for_status()
+            elements = (osm_resp.json() or {}).get('elements', [])
+        except Exception as osm_err:
+            osm_warning = str(osm_err)
+            print(f"⚠️  Trust-score OSM fallback: {osm_warning}")
 
         hospital_points = []
         attraction_count = 0
@@ -1368,6 +1411,12 @@ def get_local_trust_score():
             'focus_area': weakest,
             'recommendation': recommendation_map.get(weakest, 'Travel with normal precautions.'),
         }
+
+        if osm_warning:
+            result['data_quality'] = {
+                'osm_available': False,
+                'warning': 'OSM context temporarily unavailable; score uses weather-priority fallback.'
+            }
 
         cache_set(cache_key, result, _CACHE_TTL['trust_score'])
         return jsonify(result)
@@ -1590,12 +1639,11 @@ def login():
             try:
                 ref = firebase_db.reference('/users')
                 all_users = ref.get()
-                if all_users and isinstance(all_users, dict):
-                    for uid, udata in all_users.items():
-                        if udata.get('email', '').lower() == email.lower() and udata.get('role') == role:
-                            user_data = udata
-                            user_key = uid
-                            break
+                for uid, udata in _iter_valid_user_records(all_users):
+                    if udata.get('email', '').lower() == email.lower() and udata.get('role') == role:
+                        user_data = udata
+                        user_key = uid
+                        break
             except Exception as e:
                 print(f"⚠️  Firebase auth error: {e}")
                 flash('An error occurred. Please try again.', 'error')
@@ -1622,6 +1670,7 @@ def login():
         session['user_id'] = user_key
         session['role'] = user_data.get('role', 'user')
         session['name'] = user_data.get('name', 'User')
+        _touch_last_login(user_key)
         
         if role == 'agency':
             flash(f'Welcome back, {user_data["name"]}!', 'success')
@@ -1635,7 +1684,7 @@ def login():
 @app.route('/auth/google', methods=['POST'])
 def google_auth():
     """Handle Google OAuth sign-in via Firebase ID token."""
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     id_token = data.get('idToken', '')
     role = data.get('role', 'user')
     
@@ -1698,11 +1747,10 @@ def google_auth():
         try:
             ref = firebase_db.reference('/users')
             all_users = ref.get()
-            if all_users and isinstance(all_users, dict):
-                for ukey, udata in all_users.items():
-                    if udata.get('email', '').lower() == email.lower() and udata.get('role') == role:
-                        existing_user_key = ukey
-                        break
+            for ukey, udata in _iter_valid_user_records(all_users):
+                if udata.get('email', '').lower() == email.lower() and udata.get('role') == role:
+                    existing_user_key = ukey
+                    break
         except Exception as e:
             print(f'Firebase lookup error: {e}')
         
@@ -1715,6 +1763,7 @@ def google_auth():
         session['user_id'] = user_key
         session['role'] = role
         session['name'] = name
+        _touch_last_login(user_key)
         
         # Determine redirect URL
         redirect_url = url_for('agency_dashboard') if role == 'agency' else url_for('profile')
@@ -1747,11 +1796,10 @@ def register():
             try:
                 ref = firebase_db.reference('/users')
                 all_users = ref.get()
-                if all_users and isinstance(all_users, dict):
-                    for uid, udata in all_users.items():
-                        if udata.get('email', '').lower() == email.lower() and udata.get('role') == role:
-                            email_exists = True
-                            break
+                for uid, udata in _iter_valid_user_records(all_users):
+                    if udata.get('email', '').lower() == email.lower() and udata.get('role') == role:
+                        email_exists = True
+                        break
             except Exception as e:
                 print(f"⚠️  Firebase register error: {e}")
         else:
@@ -2205,7 +2253,10 @@ def agency_add_package():
         pct = round((1 - new_package['price'] / new_package['old_price']) * 100)
         new_package['discount'] = f'{pct}% OFF'
     
-    db_add_package(pkg_id, new_package)
+    if not db_add_package(pkg_id, new_package):
+        flash('Package save failed in Firebase. Please check DB credentials/rules and try again.', 'error')
+        return redirect(url_for('agency_dashboard'))
+
     flash(f'Package "{title}" added successfully! It is now visible to customers.', 'success')
     return redirect(url_for('agency_dashboard'))
 
@@ -2225,7 +2276,10 @@ def agency_delete_package(id):
         flash('You do not have permission to delete this package.', 'error')
         return redirect(url_for('agency_dashboard'))
     
-    db_delete_package(id)
+    if not db_delete_package(id):
+        flash('Package delete failed in Firebase. Please try again.', 'error')
+        return redirect(url_for('agency_dashboard'))
+
     flash(f'Package "{package["title"]}" has been removed.', 'success')
     return redirect(url_for('agency_dashboard'))
 
@@ -2387,7 +2441,10 @@ def agency_edit_package(id):
 
     update_data['carbon_score'] = _calculate_carbon_score(update_data['duration'], update_data['transport_type'])
     
-    db_update_package(id, update_data)
+    if not db_update_package(id, update_data):
+        flash('Package update failed in Firebase. Please check DB credentials/rules and try again.', 'error')
+        return redirect(url_for('agency_dashboard'))
+
     flash(f'Package "{title}" updated successfully!', 'success')
     return redirect(url_for('agency_dashboard'))
 
