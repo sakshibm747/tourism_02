@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, session, redirect, url_for, flash, jsonify, Response, send_from_directory
+from flask import Flask, render_template, request, session, redirect, url_for, flash, jsonify, Response
 from config import Config
 import firebase_admin
 from firebase_admin import credentials, db as firebase_db, auth as firebase_auth
@@ -29,7 +29,6 @@ except Exception:
 
 app = Flask(__name__)
 app.config.from_object(Config)
-APP_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # Simple in-memory cache for external API responses
 _api_cache = {}
@@ -193,58 +192,24 @@ def _haversine_km(lat1, lon1, lat2, lon2):
 app.secret_key = 'demo_secret_key_for_tourism_app'  # Required for session storage
 
 # --- File Upload Config ---
-DEFAULT_UPLOAD_FOLDER = os.path.join(APP_ROOT, 'static', 'uploads')
-PERSISTENT_UPLOAD_FOLDER = os.environ.get('UPLOAD_PERSISTENT_DIR', '').strip()
-USE_PERSISTENT_UPLOADS = bool(PERSISTENT_UPLOAD_FOLDER)
-
-if USE_PERSISTENT_UPLOADS:
-    UPLOAD_FOLDER = os.path.abspath(PERSISTENT_UPLOAD_FOLDER)
-    UPLOAD_URL_PREFIX = '/uploads'
-else:
-    UPLOAD_FOLDER = DEFAULT_UPLOAD_FOLDER
-    UPLOAD_URL_PREFIX = '/static/uploads'
-
+UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['UPLOAD_URL_PREFIX'] = UPLOAD_URL_PREFIX
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB max
 ALLOWED_IMG_EXT = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 ALLOWED_VID_EXT = {'mp4', 'webm', 'mov'}
 STORY_AUDIO_FOLDER = os.path.join(UPLOAD_FOLDER, 'stories')
 os.makedirs(STORY_AUDIO_FOLDER, exist_ok=True)
 
-if USE_PERSISTENT_UPLOADS:
-    print(f"✅ Persistent uploads enabled: {UPLOAD_FOLDER}")
-else:
-    print(f"ℹ️  Using local uploads folder: {UPLOAD_FOLDER}")
-
 LOCAL_RUNTIME_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runtime_data')
 LOCAL_USERS_FILE = os.path.join(LOCAL_RUNTIME_DIR, 'users.json')
 _LOCAL_USERS_LOCK = threading.Lock()
-DEFAULT_PACKAGE_IMAGE = '/static/images/placeholder-package.svg'
 PASSWORD_RESET_OTP_LEN = 6
 PASSWORD_RESET_OTP_TTL_SEC = 600
 PASSWORD_RESET_MAX_ATTEMPTS = 5
 
 def allowed_file(filename, allowed_ext):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_ext
-
-
-def _upload_public_url(relative_path):
-    rel = str(relative_path or '').lstrip('/').replace('\\', '/')
-    prefix = app.config.get('UPLOAD_URL_PREFIX', '/static/uploads').rstrip('/')
-    return f'{prefix}/{rel}' if rel else prefix
-
-
-def _resolve_upload_local_path(url_path):
-    raw = str(url_path or '').strip()
-    if raw.startswith('/uploads/'):
-        rel = raw[len('/uploads/'):]
-        return os.path.join(app.config.get('UPLOAD_FOLDER', DEFAULT_UPLOAD_FOLDER), rel.replace('/', os.sep))
-    if raw.startswith('/static/uploads/'):
-        rel = raw[len('/static/uploads/'):]
-        return os.path.join(DEFAULT_UPLOAD_FOLDER, rel.replace('/', os.sep))
-    return ''
 
 def optimize_image(file_obj, max_width=1920, max_height=1080, quality=90):
     """Resize and compress image for high-quality display without blur."""
@@ -290,15 +255,8 @@ def save_uploaded_files(files, allowed_ext):
             else:
                 unique_name = f'{uuid.uuid4().hex}.{ext}'
                 f.save(os.path.join(UPLOAD_FOLDER, unique_name))
-            urls.append(_upload_public_url(unique_name))
+            urls.append(f'/static/uploads/{unique_name}')
     return urls
-
-
-@app.route('/uploads/<path:filename>')
-def uploaded_files(filename):
-    # Always serve from configured upload folder. This enables persistent-disk mode
-    # while preserving backward compatibility with existing application flows.
-    return send_from_directory(app.config.get('UPLOAD_FOLDER', DEFAULT_UPLOAD_FOLDER), filename)
 
 # --- Firebase Initialization (Realtime Database — free Spark plan) ---
 FIREBASE_ENABLED = False
@@ -354,82 +312,6 @@ def _normalize_role(value):
     if compact in ('user', 'customer', 'traveler', 'traveller', 'tourist'):
         return 'user'
     return 'user'
-
-
-def _normalize_image_url(value):
-    """Normalize image URL/path so clients can reliably render media on mobile."""
-    raw = str(value or '').strip()
-    if not raw:
-        return DEFAULT_PACKAGE_IMAGE
-
-    if raw.startswith('//'):
-        raw = f'https:{raw}'
-    if raw.startswith('www.'):
-        raw = f'https://{raw}'
-    if raw.startswith('http://'):
-        raw = f'https://{raw[len("http://"):]}'
-    if raw.startswith('uploads/'):
-        raw = f'/{raw}'
-    if raw.startswith('static/'):
-        raw = f'/{raw}'
-
-    if re.match(r'^[A-Za-z]:[\\/]', raw) or raw.startswith('file://'):
-        return DEFAULT_PACKAGE_IMAGE
-
-    if raw.startswith('/uploads/') or raw.startswith('/static/uploads/'):
-        local_path = _resolve_upload_local_path(raw)
-        if not local_path or not os.path.exists(local_path):
-            return DEFAULT_PACKAGE_IMAGE
-        return raw
-
-    if raw.startswith('/static/'):
-        local_path = os.path.join(APP_ROOT, raw.lstrip('/').replace('/', os.sep))
-        if not os.path.exists(local_path):
-            return DEFAULT_PACKAGE_IMAGE
-        return raw
-
-    if raw.startswith('/'):
-        return raw
-
-    if raw.startswith('https://') or raw.startswith('data:image/'):
-        return raw
-
-    return DEFAULT_PACKAGE_IMAGE
-
-
-def _sanitize_package_media(pkg):
-    """Ensure package image fields always contain renderable URLs."""
-    if not isinstance(pkg, dict):
-        return pkg
-
-    image = _normalize_image_url(pkg.get('image', ''))
-
-    gallery_raw = pkg.get('gallery') if isinstance(pkg.get('gallery'), list) else []
-    gallery = []
-    seen = set()
-    for item in gallery_raw:
-        normalized = _normalize_image_url(item)
-        if normalized not in seen:
-            gallery.append(normalized)
-            seen.add(normalized)
-    if not gallery:
-        gallery = [image]
-
-    images_raw = pkg.get('images') if isinstance(pkg.get('images'), list) else []
-    images = []
-    seen_images = set()
-    for item in images_raw:
-        normalized = _normalize_image_url(item)
-        if normalized not in seen_images:
-            images.append(normalized)
-            seen_images.add(normalized)
-    if not images:
-        images = [image]
-
-    pkg['image'] = image
-    pkg['gallery'] = gallery
-    pkg['images'] = images
-    return pkg
 
 
 def _verify_user_password(user_key, user_data, password):
@@ -898,7 +780,6 @@ def db_get_all_packages():
     recent_booking_map = _get_recent_bookings_map()
     for pkg in data.values():
         if isinstance(pkg, dict):
-            _sanitize_package_media(pkg)
             _attach_carbon_score(pkg)
             _attach_recent_booking_label(pkg, recent_booking_map)
     return data
@@ -917,7 +798,6 @@ def db_get_package(pkg_id):
         data = MOCK_DATABASE['packages'].get(pkg_id)
 
     if isinstance(data, dict):
-        _sanitize_package_media(data)
         _attach_carbon_score(data)
         _attach_recent_booking_label(data)
         _ensure_hyperlocal_stories(data, persist=not bool(data.get('hyperlocal_stories')))
@@ -975,7 +855,6 @@ def db_get_packages_by_agency(agency_id):
                 recent_booking_map = _get_recent_bookings_map()
                 for pkg in packages:
                     if isinstance(pkg, dict):
-                        _sanitize_package_media(pkg)
                         _attach_carbon_score(pkg)
                         _attach_recent_booking_label(pkg, recent_booking_map)
                 return packages
@@ -986,7 +865,6 @@ def db_get_packages_by_agency(agency_id):
     recent_booking_map = _get_recent_bookings_map()
     for pkg in packages:
         if isinstance(pkg, dict):
-            _sanitize_package_media(pkg)
             _attach_carbon_score(pkg)
             _attach_recent_booking_label(pkg, recent_booking_map)
     return packages
@@ -1124,7 +1002,7 @@ def _generate_story_audio_file(pkg_id, story_idx, narration, force=False):
     safe_pkg = _story_safe_slug(pkg_id)
     filename = f'{safe_pkg}-story-{story_idx + 1}.mp3'
     abs_path = os.path.join(STORY_AUDIO_FOLDER, filename)
-    rel_url = _upload_public_url(f'stories/{filename}')
+    rel_url = f'/static/uploads/stories/{filename}'
 
     if os.path.exists(abs_path) and not force:
         return rel_url

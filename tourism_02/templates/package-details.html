@@ -61,8 +61,7 @@
         </button>
         <div class="gallery-main" id="gallery-main">
             <img id="gallery-main-img" src="{{ package.gallery[0] if package.gallery else package.images[0] }}"
-                alt="{{ package.title }}" onclick="openLightbox()" fetchpriority="high"
-                onerror="this.onerror=null; this.src='{{ url_for('static', filename='images/placeholder-package.svg') }}';">
+                alt="{{ package.title }}" onclick="openLightbox()" fetchpriority="high">
         </div>
         <button class="gallery-nav-btn gallery-next" onclick="galleryNav(1)" aria-label="Next">
             <i class="fas fa-chevron-right"></i>
@@ -84,8 +83,7 @@
         {% for img in package.gallery %}
         <div class="gallery-thumb {% if loop.first %}active{% endif %}" data-index="{{ loop.index0 }}" data-type="image"
             data-src="{{ img }}" onclick="selectThumb(this)">
-            <img src="{{ img }}" alt="Gallery {{ loop.index }}" loading="lazy"
-                onerror="this.onerror=null; this.src='{{ url_for('static', filename='images/placeholder-package.svg') }}';">
+            <img src="{{ img }}" alt="Gallery {{ loop.index }}" loading="lazy">
         </div>
         {% endfor %}
         {% if package.videos %}
@@ -727,8 +725,6 @@
 <script id="ambient-data"
     type="application/json">{{ package.ambient_sound | tojson | safe if package.ambient_sound else '{}' }}</script>
 <script>
-    const packageFallbackImage = '{{ url_for('static', filename='images/placeholder-package.svg') }}';
-
     // Gallery data
     const galleryItems = [];
     document.querySelectorAll('.gallery-thumb').forEach(thumb => {
@@ -848,7 +844,7 @@
         if (item.type === 'video') {
             renderVideoInMain(mainEl, item.src);
         } else {
-            mainEl.innerHTML = `<img id="gallery-main-img" src="${item.src}" alt="Gallery" onclick="openLightbox()" onerror="this.onerror=null; this.src='${packageFallbackImage}';">`;
+            mainEl.innerHTML = `<img id="gallery-main-img" src="${item.src}" alt="Gallery" onclick="openLightbox()">`;
         }
 
         // Update counter
@@ -889,7 +885,7 @@
         if (item.type === 'video') return; // don't open lightbox for videos
         const lb = document.getElementById('gallery-lightbox');
         const lbContent = document.getElementById('lightbox-content');
-        lbContent.innerHTML = `<img id="lightbox-img" src="${item.src}" alt="Fullscreen view" onerror="this.onerror=null; this.src='${packageFallbackImage}';">`;
+        lbContent.innerHTML = `<img id="lightbox-img" src="${item.src}" alt="Fullscreen view">`;
         document.getElementById('lightbox-counter').textContent = `${currentIndex + 1} / ${totalItems}`;
         lb.classList.add('open');
         document.body.style.overflow = 'hidden';
@@ -917,7 +913,7 @@
         currentIndex = newIndex;
         updateMainDisplay(currentIndex);
         const item = galleryItems[currentIndex];
-        document.getElementById('lightbox-content').innerHTML = `<img id="lightbox-img" src="${item.src}" alt="Fullscreen view" onerror="this.onerror=null; this.src='${packageFallbackImage}';">`;
+        document.getElementById('lightbox-content').innerHTML = `<img id="lightbox-img" src="${item.src}" alt="Fullscreen view">`;
         document.getElementById('lightbox-counter').textContent = `${currentIndex + 1} / ${totalItems}`;
     }
 

@@ -1,6 +1,4 @@
 document.addEventListener('DOMContentLoaded', () => {
-    const packageFallbackImage = '/static/images/placeholder-package.svg';
-
     // Basic Carousel Implementation
     const track = document.querySelector('.carousel-track');
     const prevBtn = document.querySelector('.prev-btn');
@@ -55,7 +53,7 @@ document.addEventListener('DOMContentLoaded', () => {
                              alt="${pkg.title}" 
                              loading="lazy" 
                              decoding="async" 
-                            onerror="this.onerror=null; this.src='${packageFallbackImage}';">
+                             onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1518182170546-0766de6b6aad?auto=format&fit=crop&w=500&q=80';">
                         <div class="deal-info">
                             <span class="deal-tag">${pkg.tag}</span>
                             <h3>${pkg.title}</h3>
