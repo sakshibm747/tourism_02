@@ -1767,15 +1767,13 @@ def login():
     if request.method == 'POST':
         email = request.form.get('email', '').strip()
         password = request.form.get('password', '').strip()
-        role = request.form.get('role', 'user')
+        role = (request.form.get('role', 'user') or 'user').strip().lower()
         
         if not email or not password:
             flash('Email and password are required.', 'error')
             return render_template('login.html')
         
-        # Look up user in Firebase Realtime Database
-        user_data = None
-        user_key = None
+        # Look up all accounts matching this email first.
         email_matches = []
         if FIREBASE_ENABLED:
             try:
@@ -1784,10 +1782,6 @@ def login():
                 for uid, udata in _iter_valid_user_records(all_users):
                     if udata.get('email', '').lower() == email.lower():
                         email_matches.append((uid, udata))
-                        if udata.get('role') == role:
-                            user_data = udata
-                            user_key = uid
-                            break
             except Exception as e:
                 print(f"⚠️  Firebase auth error: {e}")
                 flash('An error occurred. Please try again.', 'error')
@@ -1797,28 +1791,47 @@ def login():
             for uid, udata in MOCK_DATABASE.get('users', {}).items():
                 if udata.get('email', '').lower() == email.lower():
                     email_matches.append((uid, udata))
-                    if udata.get('role') == role:
-                        user_data = udata
-                        user_key = uid
-                        break
 
-        # If role tab is wrong but email matches exactly one account, login using that account.
-        if not user_data and len(email_matches) == 1:
-            user_key, user_data = email_matches[0]
-
-        # If same email has multiple role accounts and none matched selected role, ask user to pick role tab.
-        if not user_data and len(email_matches) > 1:
-            flash('This email exists in multiple roles. Please select the correct role tab (Customer/Agency).', 'error')
-            return render_template('login.html')
-        
-        if not user_data:
+        if not email_matches:
             flash('Account not found. Please register first or check your role tab.', 'error')
             return render_template('login.html')
-        
-        # Verify password
+
+        # Verify password against matched accounts, prioritizing selected role.
         from werkzeug.security import check_password_hash
-        if not check_password_hash(user_data.get('password_hash', ''), password):
-            flash('Incorrect password. Please try again.', 'error')
+
+        prioritized = []
+        secondary = []
+        for uid, udata in email_matches:
+            account_role = (udata.get('role', 'user') or 'user').strip().lower()
+            if account_role == role:
+                prioritized.append((uid, udata))
+            else:
+                secondary.append((uid, udata))
+
+        user_key = None
+        user_data = None
+
+        for uid, udata in prioritized + secondary:
+            pwd_hash = (udata or {}).get('password_hash', '')
+            if not pwd_hash:
+                continue
+            try:
+                if check_password_hash(pwd_hash, password):
+                    user_key = uid
+                    user_data = udata
+                    break
+            except Exception:
+                continue
+
+        if not user_data:
+            google_only_account = any(
+                (u.get('auth_provider') == 'google') and not u.get('password_hash')
+                for _, u in email_matches
+            )
+            if google_only_account:
+                flash('This account was created with Google. Please use Sign in with Google.', 'error')
+            else:
+                flash('Incorrect password. Please try again.', 'error')
             return render_template('login.html')
         
         # Set session
