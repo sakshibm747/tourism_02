@@ -52,13 +52,19 @@
 
         <div>
             <label style="font-size: 13px; font-weight: 600; color: var(--text-dark);">Email Address</label>
-            <input type="email" name="email" placeholder="Enter your email" required
+            <input type="email" id="login-email" name="email" placeholder="Enter your email" required
                 style="width: 100%; padding: 12px; margin-top: 5px; border: 1px solid #ccc; border-radius: 8px; outline: none; transition: border 0.3s;">
         </div>
         <div>
             <label style="font-size: 13px; font-weight: 600; color: var(--text-dark);">Password</label>
             <input type="password" name="password" placeholder="Enter your password" required
                 style="width: 100%; padding: 12px; margin-top: 5px; border: 1px solid #ccc; border-radius: 8px; outline: none; transition: border 0.3s;">
+        </div>
+        <div style="text-align: right; margin-top: -6px;">
+            <button type="button" onclick="openForgotPassword()"
+                style="border:none;background:none;color:var(--primary-color);font-size:13px;font-weight:600;cursor:pointer;padding:0;">
+                Forgot password?
+            </button>
         </div>
 
         <button type="submit"
@@ -92,6 +98,42 @@
             Sign in with Google
         </button>
     </form>
+
+    <div id="forgot-password-panel"
+        style="display:none; margin-top: 16px; padding: 14px; border-radius: 10px; background: #f8fafc; border: 1px solid #dbeafe;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <strong style="font-size:14px; color:#1e3a8a;">Reset Password</strong>
+            <button type="button" onclick="closeForgotPassword()"
+                style="border:none;background:none;color:#64748b;cursor:pointer;font-size:13px;">Close</button>
+        </div>
+
+        <div id="fp-step-request">
+            <label style="font-size: 12px; font-weight: 600; color: #334155;">Email Address</label>
+            <input type="email" id="fp-email" placeholder="Enter your account email"
+                style="width:100%;padding:10px;margin-top:5px;border:1px solid #cbd5e1;border-radius:8px;outline:none;">
+            <button type="button" id="fp-send-otp-btn" onclick="requestForgotOtp()"
+                style="margin-top:10px;width:100%;border:none;border-radius:8px;padding:10px 12px;font-weight:700;color:white;background:linear-gradient(93deg,#2563eb,#1d4ed8);cursor:pointer;">
+                Send OTP
+            </button>
+        </div>
+
+        <div id="fp-step-verify" style="display:none; margin-top:10px;">
+            <label style="font-size: 12px; font-weight: 600; color: #334155;">OTP</label>
+            <input type="text" id="fp-otp" inputmode="numeric" maxlength="6" placeholder="Enter 6-digit OTP"
+                style="width:100%;padding:10px;margin-top:5px;border:1px solid #cbd5e1;border-radius:8px;outline:none;">
+
+            <label style="font-size: 12px; font-weight: 600; color: #334155; display:block; margin-top:8px;">New Password</label>
+            <input type="password" id="fp-new-password" minlength="6" placeholder="Enter new password"
+                style="width:100%;padding:10px;margin-top:5px;border:1px solid #cbd5e1;border-radius:8px;outline:none;">
+
+            <button type="button" id="fp-reset-btn" onclick="submitForgotOtp()"
+                style="margin-top:10px;width:100%;border:none;border-radius:8px;padding:10px 12px;font-weight:700;color:white;background:linear-gradient(93deg,#00a12e,#00c853);cursor:pointer;">
+                Verify OTP & Reset Password
+            </button>
+        </div>
+
+        <div id="fp-message" style="display:none; margin-top:10px; font-size:12px; padding:8px; border-radius:8px;"></div>
+    </div>
 
     <!-- REGISTER FORM (hidden by default) -->
     <form id="register-form" action="/register" method="POST" style="display: none; flex-direction: column; gap: 15px;">
@@ -156,6 +198,102 @@
     var currentMode = '{{ "register" if show_register else "login" }}';
     var currentRole = 'user';
 
+    function setForgotMessage(message, isError) {
+        var box = document.getElementById('fp-message');
+        if (!box) return;
+        box.style.display = 'block';
+        box.style.background = isError ? '#fee2e2' : '#dcfce7';
+        box.style.color = isError ? '#991b1b' : '#166534';
+        box.textContent = message;
+    }
+
+    function openForgotPassword() {
+        switchMode('login');
+        var panel = document.getElementById('forgot-password-panel');
+        var fpEmail = document.getElementById('fp-email');
+        var loginEmail = document.getElementById('login-email');
+        if (fpEmail && loginEmail && loginEmail.value) {
+            fpEmail.value = loginEmail.value.trim();
+        }
+        document.getElementById('fp-step-request').style.display = 'block';
+        document.getElementById('fp-step-verify').style.display = 'none';
+        document.getElementById('fp-message').style.display = 'none';
+        panel.style.display = 'block';
+    }
+
+    function closeForgotPassword() {
+        var panel = document.getElementById('forgot-password-panel');
+        if (panel) panel.style.display = 'none';
+    }
+
+    function requestForgotOtp() {
+        var email = (document.getElementById('fp-email').value || '').trim();
+        var btn = document.getElementById('fp-send-otp-btn');
+
+        if (!email) {
+            setForgotMessage('Please enter your email.', true);
+            return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Sending OTP...';
+
+        fetch('/auth/forgot-password/request', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email, role: currentRole })
+        })
+            .then(function (res) { return res.json().then(function (data) { return { ok: res.ok, data: data }; }); })
+            .then(function (resp) {
+                if (!resp.ok) throw new Error(resp.data.error || 'Could not send OTP.');
+                setForgotMessage(resp.data.message || 'OTP sent to your email.', false);
+                document.getElementById('fp-step-verify').style.display = 'block';
+            })
+            .catch(function (err) {
+                setForgotMessage(err.message || 'Could not send OTP.', true);
+            })
+            .finally(function () {
+                btn.disabled = false;
+                btn.textContent = 'Send OTP';
+            });
+    }
+
+    function submitForgotOtp() {
+        var email = (document.getElementById('fp-email').value || '').trim();
+        var otp = (document.getElementById('fp-otp').value || '').trim();
+        var newPassword = (document.getElementById('fp-new-password').value || '').trim();
+        var btn = document.getElementById('fp-reset-btn');
+
+        if (!email || !otp || !newPassword) {
+            setForgotMessage('Please fill email, OTP and new password.', true);
+            return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Verifying...';
+
+        fetch('/auth/forgot-password/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email, role: currentRole, otp: otp, new_password: newPassword })
+        })
+            .then(function (res) { return res.json().then(function (data) { return { ok: res.ok, data: data }; }); })
+            .then(function (resp) {
+                if (!resp.ok) throw new Error(resp.data.error || 'Could not reset password.');
+                setForgotMessage(resp.data.message || 'Password reset successful. Redirecting...', false);
+                if (resp.data.redirect) {
+                    window.location.href = resp.data.redirect;
+                }
+            })
+            .catch(function (err) {
+                setForgotMessage(err.message || 'Could not reset password.', true);
+            })
+            .finally(function () {
+                btn.disabled = false;
+                btn.textContent = 'Verify OTP & Reset Password';
+            });
+    }
+
     function switchMode(mode) {
         currentMode = mode;
         var loginForm = document.getElementById('login-form');
@@ -177,6 +315,7 @@
         } else {
             loginForm.style.display = 'none';
             registerForm.style.display = 'flex';
+            closeForgotPassword();
             registerBtn.style.background = 'linear-gradient(93deg, #00a12e, #00c853)';
             registerBtn.style.color = 'white';
             loginBtn.style.background = 'none';

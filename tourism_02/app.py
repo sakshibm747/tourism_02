@@ -13,6 +13,7 @@ import zipfile
 import re
 import math
 import threading
+import secrets
 from datetime import datetime, timedelta
 import smtplib
 from email.message import EmailMessage
@@ -203,6 +204,9 @@ os.makedirs(STORY_AUDIO_FOLDER, exist_ok=True)
 LOCAL_RUNTIME_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runtime_data')
 LOCAL_USERS_FILE = os.path.join(LOCAL_RUNTIME_DIR, 'users.json')
 _LOCAL_USERS_LOCK = threading.Lock()
+PASSWORD_RESET_OTP_LEN = 6
+PASSWORD_RESET_OTP_TTL_SEC = 600
+PASSWORD_RESET_MAX_ATTEMPTS = 5
 
 def allowed_file(filename, allowed_ext):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_ext
@@ -335,6 +339,10 @@ def _verify_user_password(user_key, user_data, password):
     return False
 
 
+def _generate_password_reset_otp():
+    return ''.join(str(secrets.randbelow(10)) for _ in range(PASSWORD_RESET_OTP_LEN))
+
+
 def _write_local_users_nolock(users_map):
     os.makedirs(LOCAL_RUNTIME_DIR, exist_ok=True)
     tmp_file = LOCAL_USERS_FILE + '.tmp'
@@ -405,6 +413,43 @@ def _update_local_user(user_id, patch):
             obj.update(patch)
             users[str(user_id)] = obj
             _write_local_users_nolock(users)
+
+
+def _persist_user_patch(user_id, patch):
+    """Persist user patch to primary store and local mirror."""
+    if FIREBASE_ENABLED:
+        firebase_db.reference(f'/users/{user_id}').update(patch)
+    _update_local_user(user_id, patch)
+
+
+def _find_accounts_by_email(email):
+    all_users = _get_users_map()
+    matches = []
+    for uid, udata in _iter_valid_user_records(all_users):
+        if _normalize_email(udata.get('email', '')) == email:
+            matches.append((uid, udata))
+    return matches
+
+
+def _resolve_account_for_role(email, role):
+    """Resolve account for role, with a single-account fallback for wrong tab picks."""
+    matches = _find_accounts_by_email(email)
+    if not matches:
+        return None, None, 'not_found'
+
+    role_matches = []
+    for uid, udata in matches:
+        account_role = (udata.get('role', 'user') or 'user').strip().lower()
+        if account_role == role:
+            role_matches.append((uid, udata))
+
+    if role_matches:
+        return role_matches[0][0], role_matches[0][1], ''
+
+    if len(matches) == 1:
+        return matches[0][0], matches[0][1], ''
+
+    return None, None, 'role_conflict'
 
 
 def _touch_last_login(user_key):
@@ -1907,11 +1952,7 @@ def login():
             return render_template('login.html')
         
         # Look up all accounts matching this email first.
-        email_matches = []
-        all_users = _get_users_map()
-        for uid, udata in _iter_valid_user_records(all_users):
-            if _normalize_email(udata.get('email', '')) == email:
-                email_matches.append((uid, udata))
+        email_matches = _find_accounts_by_email(email)
 
         if not email_matches:
             flash('Account not found. Please register first or check your role tab.', 'error')
@@ -2064,6 +2105,138 @@ def google_auth():
     except Exception as e:
         print(f'Google auth session/db error ({type(e).__name__}): {e}')
         return jsonify({'error': f'Authentication failed: {e}'}), 500
+
+
+@app.route('/auth/forgot-password/request', methods=['POST'])
+def forgot_password_request():
+    data = request.get_json(silent=True) or {}
+    email = _normalize_email(data.get('email', ''))
+    role = (data.get('role', 'user') or 'user').strip().lower()
+
+    if not email:
+        return jsonify({'error': 'Email is required.'}), 400
+
+    user_key, user_data, resolve_error = _resolve_account_for_role(email, role)
+    if resolve_error == 'role_conflict':
+        return jsonify({'error': 'This email exists under multiple roles. Please choose the correct role tab.'}), 409
+    if resolve_error == 'not_found' or not user_key or not user_data:
+        return jsonify({'error': 'Account not found for the provided email.'}), 404
+
+    otp = _generate_password_reset_otp()
+    otp_expiry_ts = int(time.time()) + PASSWORD_RESET_OTP_TTL_SEC
+
+    from werkzeug.security import generate_password_hash
+    patch = {
+        'password_reset_otp_hash': generate_password_hash(otp),
+        'password_reset_otp_expiry_ts': otp_expiry_ts,
+        'password_reset_otp_attempts': 0,
+        'password_reset_requested_at': int(time.time())
+    }
+
+    try:
+        _persist_user_patch(user_key, patch)
+    except Exception as e:
+        print(f"⚠️  OTP persist error: {e}")
+        return jsonify({'error': 'Could not start password reset. Please try again.'}), 500
+
+    minutes = max(1, PASSWORD_RESET_OTP_TTL_SEC // 60)
+    subject = 'NammaKarnataka Password Reset OTP'
+    body = (
+        f'Hello {user_data.get("name", "Traveler")},\n\n'
+        f'Your OTP to reset your password is: {otp}\n'
+        f'This OTP is valid for {minutes} minutes.\n\n'
+        f'If you did not request this reset, please ignore this email.\n'
+    )
+
+    if not _send_email_alert(email, subject, body):
+        try:
+            _persist_user_patch(user_key, {
+                'password_reset_otp_hash': '',
+                'password_reset_otp_expiry_ts': 0,
+                'password_reset_otp_attempts': 0
+            })
+        except Exception:
+            pass
+        return jsonify({'error': 'Email service is unavailable. Please try again later.'}), 503
+
+    return jsonify({'success': True, 'message': f'OTP sent to {email}.'})
+
+
+@app.route('/auth/forgot-password/verify', methods=['POST'])
+def forgot_password_verify():
+    data = request.get_json(silent=True) or {}
+    email = _normalize_email(data.get('email', ''))
+    role = (data.get('role', 'user') or 'user').strip().lower()
+    otp = str(data.get('otp', '')).strip()
+    new_password = str(data.get('new_password', '')).strip()
+
+    if not email or not otp or not new_password:
+        return jsonify({'error': 'Email, OTP, and new password are required.'}), 400
+    if len(new_password) < 6:
+        return jsonify({'error': 'New password must be at least 6 characters.'}), 400
+    if not otp.isdigit() or len(otp) != PASSWORD_RESET_OTP_LEN:
+        return jsonify({'error': 'Please enter a valid 6-digit OTP.'}), 400
+
+    user_key, user_data, resolve_error = _resolve_account_for_role(email, role)
+    if resolve_error == 'role_conflict':
+        return jsonify({'error': 'This email exists under multiple roles. Please choose the correct role tab.'}), 409
+    if resolve_error == 'not_found' or not user_key or not user_data:
+        return jsonify({'error': 'Account not found for the provided email.'}), 404
+
+    otp_hash = (user_data.get('password_reset_otp_hash') or '').strip()
+    otp_expiry_ts = int(user_data.get('password_reset_otp_expiry_ts') or 0)
+    attempts = int(user_data.get('password_reset_otp_attempts') or 0)
+    now_ts = int(time.time())
+
+    if not otp_hash or otp_expiry_ts <= 0:
+        return jsonify({'error': 'OTP not requested. Please request a new OTP.'}), 400
+    if now_ts > otp_expiry_ts:
+        return jsonify({'error': 'OTP has expired. Please request a new OTP.'}), 400
+    if attempts >= PASSWORD_RESET_MAX_ATTEMPTS:
+        return jsonify({'error': 'Too many invalid OTP attempts. Please request a new OTP.'}), 429
+
+    from werkzeug.security import check_password_hash, generate_password_hash
+    otp_ok = False
+    try:
+        otp_ok = check_password_hash(otp_hash, otp)
+    except Exception:
+        otp_ok = False
+
+    if not otp_ok:
+        attempts += 1
+        try:
+            _persist_user_patch(user_key, {'password_reset_otp_attempts': attempts})
+        except Exception:
+            pass
+        remaining = max(0, PASSWORD_RESET_MAX_ATTEMPTS - attempts)
+        if remaining == 0:
+            return jsonify({'error': 'Too many invalid OTP attempts. Please request a new OTP.'}), 429
+        return jsonify({'error': f'Invalid OTP. {remaining} attempt(s) left.'}), 400
+
+    account_role = (user_data.get('role', 'user') or 'user').strip().lower()
+    patch = {
+        'password_hash': generate_password_hash(new_password),
+        'password': '',
+        'passwordHash': '',
+        'password_reset_otp_hash': '',
+        'password_reset_otp_expiry_ts': 0,
+        'password_reset_otp_attempts': 0,
+        'password_reset_completed_at': now_ts
+    }
+
+    try:
+        _persist_user_patch(user_key, patch)
+    except Exception as e:
+        print(f"⚠️  Password reset persist error: {e}")
+        return jsonify({'error': 'Could not reset password. Please try again.'}), 500
+
+    session['user_id'] = user_key
+    session['role'] = account_role
+    session['name'] = user_data.get('name', 'User')
+    _touch_last_login(user_key)
+
+    redirect_url = url_for('agency_dashboard') if account_role == 'agency' else url_for('profile')
+    return jsonify({'success': True, 'redirect': redirect_url, 'message': 'Password reset successful.'})
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
