@@ -227,32 +227,21 @@
     var firebaseConfig = {{ firebase_web_config | tojson | safe }};
     firebase.initializeApp(firebaseConfig);
 
-    function signInWithGoogle() {
-        var provider = new firebase.auth.GoogleAuthProvider();
-        firebase.auth().signInWithPopup(provider)
-            .then(function (result) {
-                var user = result.user;
-                // Force refresh to get a fresh token
-                return user.getIdToken(true).then(function (idToken) {
-                    return { idToken: idToken, user: user };
-                });
-            })
-            .then(function (bundle) {
-                var user = bundle.user;
-                // Send token + user profile + role to backend
-                return fetch('/auth/google', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        idToken: bundle.idToken,
-                        role: currentRole,
-                        uid: user.uid,
-                        email: user.email,
-                        name: user.displayName || user.email,
-                        photo: user.photoURL || ''
-                    })
-                });
-            })
+    function submitGoogleSession(user) {
+        return user.getIdToken(true).then(function (idToken) {
+            return fetch('/auth/google', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    idToken: idToken,
+                    role: currentRole,
+                    uid: user.uid,
+                    email: user.email,
+                    name: user.displayName || user.email,
+                    photo: user.photoURL || ''
+                })
+            });
+        })
             .then(function (res) { return res.json(); })
             .then(function (data) {
                 if (data.success) {
@@ -260,9 +249,41 @@
                 } else {
                     alert(data.error || 'Login failed. Please try again.');
                 }
+            });
+    }
+
+    // Handle Google redirect result (used on mobile or popup-blocked browsers).
+    firebase.auth().getRedirectResult()
+        .then(function (result) {
+            if (result && result.user) {
+                return submitGoogleSession(result.user);
+            }
+        })
+        .catch(function (error) {
+            if (error && error.code) {
+                console.error('Google redirect sign-in error:', error);
+            }
+        });
+
+    function signInWithGoogle() {
+        var provider = new firebase.auth.GoogleAuthProvider();
+        var isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+
+        if (isMobile) {
+            firebase.auth().signInWithRedirect(provider);
+            return;
+        }
+
+        firebase.auth().signInWithPopup(provider)
+            .then(function (result) {
+                return submitGoogleSession(result.user);
             })
             .catch(function (error) {
                 console.error('Google sign-in error:', error);
+                if (error.code === 'auth/popup-blocked' || error.code === 'auth/cancelled-popup-request' || error.code === 'auth/operation-not-supported-in-this-environment') {
+                    firebase.auth().signInWithRedirect(provider);
+                    return;
+                }
                 if (error.code !== 'auth/popup-closed-by-user') {
                     alert('Google sign-in failed: ' + error.message);
                 }

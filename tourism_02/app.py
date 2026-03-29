@@ -12,6 +12,7 @@ import csv
 import zipfile
 import re
 import math
+import threading
 from datetime import datetime, timedelta
 import smtplib
 from email.message import EmailMessage
@@ -199,6 +200,10 @@ ALLOWED_VID_EXT = {'mp4', 'webm', 'mov'}
 STORY_AUDIO_FOLDER = os.path.join(UPLOAD_FOLDER, 'stories')
 os.makedirs(STORY_AUDIO_FOLDER, exist_ok=True)
 
+LOCAL_RUNTIME_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runtime_data')
+LOCAL_USERS_FILE = os.path.join(LOCAL_RUNTIME_DIR, 'users.json')
+_LOCAL_USERS_LOCK = threading.Lock()
+
 def allowed_file(filename, allowed_ext):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_ext
 
@@ -288,6 +293,78 @@ def _iter_valid_user_records(all_users):
             yield uid, udata
 
 
+def _write_local_users_nolock(users_map):
+    os.makedirs(LOCAL_RUNTIME_DIR, exist_ok=True)
+    tmp_file = LOCAL_USERS_FILE + '.tmp'
+    with open(tmp_file, 'w', encoding='utf-8') as f:
+        json.dump(users_map, f, ensure_ascii=True)
+    os.replace(tmp_file, LOCAL_USERS_FILE)
+
+
+def _read_local_users():
+    """Load local users from disk for non-Firebase deployments."""
+    with _LOCAL_USERS_LOCK:
+        users = {}
+        if os.path.exists(LOCAL_USERS_FILE):
+            try:
+                with open(LOCAL_USERS_FILE, 'r', encoding='utf-8') as f:
+                    raw = json.load(f)
+                    if isinstance(raw, dict):
+                        users = {str(k): v for k, v in raw.items() if isinstance(v, dict)}
+            except Exception as e:
+                print(f"⚠️  Local users file read error: {e}")
+
+        # One-time seed from in-memory users if present.
+        seeded = False
+        mem_users = MOCK_DATABASE.get('users', {}) if isinstance(MOCK_DATABASE, dict) else {}
+        if isinstance(mem_users, dict):
+            for uid, udata in mem_users.items():
+                if uid not in users and isinstance(udata, dict):
+                    users[uid] = udata
+                    seeded = True
+
+        if seeded:
+            try:
+                _write_local_users_nolock(users)
+            except Exception as e:
+                print(f"⚠️  Local users seed write error: {e}")
+
+        return users
+
+
+def _upsert_local_user(user_id, user_record):
+    with _LOCAL_USERS_LOCK:
+        users = {}
+        if os.path.exists(LOCAL_USERS_FILE):
+            try:
+                with open(LOCAL_USERS_FILE, 'r', encoding='utf-8') as f:
+                    raw = json.load(f)
+                    if isinstance(raw, dict):
+                        users = {str(k): v for k, v in raw.items() if isinstance(v, dict)}
+            except Exception as e:
+                print(f"⚠️  Local users preload error: {e}")
+        users[str(user_id)] = user_record
+        _write_local_users_nolock(users)
+
+
+def _update_local_user(user_id, patch):
+    with _LOCAL_USERS_LOCK:
+        users = {}
+        if os.path.exists(LOCAL_USERS_FILE):
+            try:
+                with open(LOCAL_USERS_FILE, 'r', encoding='utf-8') as f:
+                    raw = json.load(f)
+                    if isinstance(raw, dict):
+                        users = {str(k): v for k, v in raw.items() if isinstance(v, dict)}
+            except Exception as e:
+                print(f"⚠️  Local users preload error: {e}")
+        obj = users.get(str(user_id), {})
+        if isinstance(obj, dict):
+            obj.update(patch)
+            users[str(user_id)] = obj
+            _write_local_users_nolock(users)
+
+
 def _touch_last_login(user_key):
     """Persist last-login metadata for observability and audits."""
     now_ts = int(time.time())
@@ -300,12 +377,14 @@ def _touch_last_login(user_key):
     if FIREBASE_ENABLED:
         try:
             firebase_db.reference(f'/users/{user_key}').update(payload)
+            _update_local_user(user_key, payload)
         except Exception as e:
             print(f"⚠️  Firebase last-login update error: {e}")
     else:
-        user_obj = MOCK_DATABASE.get('users', {}).get(user_key)
-        if isinstance(user_obj, dict):
-            user_obj.update(payload)
+        try:
+            _update_local_user(user_key, payload)
+        except Exception as e:
+            print(f"⚠️  Local last-login update error: {e}")
 
 
 try:
@@ -321,9 +400,11 @@ try:
     else:
         print("ℹ️  Firebase credentials not found. Running in MOCK mode.")
         print("   Add FIREBASE_SERVICE_ACCOUNT_JSON on Render to enable realtime DB writes.")
+        print(f"   Using local auth store: {LOCAL_USERS_FILE}")
 except Exception as e:
     print(f"⚠️  Firebase initialization failed: {e}")
     print("   Running in MOCK mode (in-memory database)")
+    print(f"   Using local auth store: {LOCAL_USERS_FILE}")
 
 # Make session data available to all templates for dynamic navbar
 @app.context_processor
@@ -976,11 +1057,21 @@ def _get_users_map():
         try:
             users = firebase_db.reference('/users').get()
             if users and isinstance(users, dict):
+                # Keep a local mirror for resilience during transient Firebase issues.
+                try:
+                    with _LOCAL_USERS_LOCK:
+                        _write_local_users_nolock({str(k): v for k, v in users.items() if isinstance(v, dict)})
+                except Exception as mirror_err:
+                    print(f"⚠️  Local users mirror write error: {mirror_err}")
                 return users
         except Exception as e:
             print(f"⚠️  Firebase users query error: {e}")
+            fallback = _read_local_users()
+            if fallback:
+                print("ℹ️  Using local auth fallback due to Firebase read issue.")
+                return fallback
         return {}
-    return MOCK_DATABASE.get('users', {})
+    return _read_local_users()
 
 
 def _get_agency_user(agency_id):
@@ -1775,22 +1866,10 @@ def login():
         
         # Look up all accounts matching this email first.
         email_matches = []
-        if FIREBASE_ENABLED:
-            try:
-                ref = firebase_db.reference('/users')
-                all_users = ref.get()
-                for uid, udata in _iter_valid_user_records(all_users):
-                    if udata.get('email', '').lower() == email.lower():
-                        email_matches.append((uid, udata))
-            except Exception as e:
-                print(f"⚠️  Firebase auth error: {e}")
-                flash('An error occurred. Please try again.', 'error')
-                return render_template('login.html')
-        else:
-            # Fallback: check in-memory users
-            for uid, udata in MOCK_DATABASE.get('users', {}).items():
-                if udata.get('email', '').lower() == email.lower():
-                    email_matches.append((uid, udata))
+        all_users = _get_users_map()
+        for uid, udata in _iter_valid_user_records(all_users):
+            if udata.get('email', '').lower() == email.lower():
+                email_matches.append((uid, udata))
 
         if not email_matches:
             flash('Account not found. Please register first or check your role tab.', 'error')
@@ -1927,6 +2006,10 @@ def google_auth():
         user_key = existing_user_key or uid
         
         firebase_db.reference(f'/users/{user_key}').update(user_record)
+        try:
+            _upsert_local_user(user_key, user_record)
+        except Exception as mirror_err:
+            print(f"⚠️  Local users mirror write error: {mirror_err}")
         
         # Set Flask session
         session['user_id'] = user_key
@@ -1949,7 +2032,7 @@ def register():
         name = request.form.get('name', '').strip()
         email = request.form.get('email', '').strip()
         password = request.form.get('password', '').strip()
-        role = request.form.get('role', 'user')
+        role = (request.form.get('role', 'user') or 'user').strip().lower()
         
         if not name or not email or not password:
             flash('All fields are required.', 'error')
@@ -1961,21 +2044,12 @@ def register():
         
         # Check if email already exists
         email_exists = False
-        if FIREBASE_ENABLED:
-            try:
-                ref = firebase_db.reference('/users')
-                all_users = ref.get()
-                for uid, udata in _iter_valid_user_records(all_users):
-                    if udata.get('email', '').lower() == email.lower() and udata.get('role') == role:
-                        email_exists = True
-                        break
-            except Exception as e:
-                print(f"⚠️  Firebase register error: {e}")
-        else:
-            for uid, udata in MOCK_DATABASE.get('users', {}).items():
-                if udata.get('email', '').lower() == email.lower() and udata.get('role') == role:
-                    email_exists = True
-                    break
+        all_users = _get_users_map()
+        for uid, udata in _iter_valid_user_records(all_users):
+            existing_role = (udata.get('role', 'user') or 'user').strip().lower()
+            if udata.get('email', '').lower() == email.lower() and existing_role == role:
+                email_exists = True
+                break
         
         if email_exists:
             flash('An account with this email already exists for this role.', 'error')
@@ -1985,11 +2059,9 @@ def register():
         from werkzeug.security import generate_password_hash
         import time
         
-        # Generate user ID
-        if role == 'agency':
-            user_id = f'A{int(time.time())}'
-        else:
-            user_id = f'U{int(time.time())}'
+        # Generate collision-proof user ID
+        prefix = 'A' if role == 'agency' else 'U'
+        user_id = f'{prefix}{uuid.uuid4().hex[:12]}'
         
         user_record = {
             'name': name,
@@ -2002,14 +2074,21 @@ def register():
         if FIREBASE_ENABLED:
             try:
                 firebase_db.reference(f'/users/{user_id}').set(user_record)
+                try:
+                    _upsert_local_user(user_id, user_record)
+                except Exception as mirror_err:
+                    print(f"⚠️  Local users mirror write error: {mirror_err}")
             except Exception as e:
                 print(f"⚠️  Firebase write error: {e}")
                 flash('Registration failed. Please try again.', 'error')
                 return render_template('login.html', show_register=True)
         else:
-            if 'users' not in MOCK_DATABASE:
-                MOCK_DATABASE['users'] = {}
-            MOCK_DATABASE['users'][user_id] = user_record
+            try:
+                _upsert_local_user(user_id, user_record)
+            except Exception as e:
+                print(f"⚠️  Local users write error: {e}")
+                flash('Registration failed. Please try again.', 'error')
+                return render_template('login.html', show_register=True)
         
         # Auto-login after registration
         session['user_id'] = user_id
