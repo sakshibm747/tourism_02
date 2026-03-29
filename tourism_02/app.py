@@ -12,7 +12,7 @@ import csv
 import zipfile
 import re
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 import smtplib
 from email.message import EmailMessage
@@ -46,6 +46,138 @@ def cache_get(key):
 
 def cache_set(key, data, ttl):
     _api_cache[key] = {'data': data, 'ts': time.time(), 'ttl': ttl}
+
+
+def cache_get_stale(key):
+    """Return cached data even if expired, used as graceful fallback."""
+    entry = _api_cache.get(key)
+    return entry['data'] if entry else None
+
+
+def _weather_cache_key(lat, lng):
+    """Use coarse weather cache buckets to reduce provider rate-limit pressure."""
+    return f'weather:{lat:.2f},{lng:.2f}'
+
+
+def _safe_int(value, default=0):
+    try:
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def _wttr_to_wmo(code):
+    """Map wttr/WWO weather codes to Open-Meteo/WMO-like weather codes used by UI."""
+    c = _safe_int(code, 0)
+    if c == 113:
+        return 0
+    if c == 116:
+        return 2
+    if c in (119, 122):
+        return 3
+    if c in (143, 248, 260):
+        return 45
+    if c in (263, 266, 281):
+        return 51
+    if c in (176, 293, 296, 353):
+        return 61
+    if c in (299, 302, 305, 356):
+        return 63
+    if c in (308, 359):
+        return 65
+    if c in (311, 314, 317, 320, 362, 365):
+        return 67
+    if c in (179, 182, 185, 227, 230, 323, 326, 368):
+        return 71
+    if c in (329, 332, 335, 338, 371, 392, 395):
+        return 75
+    if c in (200, 386, 389):
+        return 95
+    return 3
+
+
+def _build_wttr_weather_payload(raw_data, forecast_days):
+    current_raw = ((raw_data or {}).get('current_condition') or [{}])[0]
+    daily_raw = (raw_data or {}).get('weather') or []
+
+    daily_time = []
+    daily_codes = []
+    daily_max = []
+    daily_min = []
+    daily_rain = []
+
+    for day in daily_raw[:forecast_days]:
+        hourly = day.get('hourly') or []
+        if hourly:
+            mid = hourly[len(hourly) // 2]
+            code = _wttr_to_wmo(mid.get('weatherCode'))
+            rain_values = [_safe_int(h.get('chanceofrain'), 0) for h in hourly]
+            rain_prob = max(rain_values) if rain_values else 0
+        else:
+            code = 3
+            rain_prob = 0
+
+        daily_time.append(day.get('date', ''))
+        daily_codes.append(code)
+        daily_max.append(_safe_int(day.get('maxtempC'), 0))
+        daily_min.append(_safe_int(day.get('mintempC'), 0))
+        daily_rain.append(max(0, min(100, rain_prob)))
+
+    if not daily_time:
+        for i in range(forecast_days):
+            day = datetime.now() + timedelta(days=i)
+            daily_time.append(day.strftime('%Y-%m-%d'))
+            daily_codes.append(3)
+            daily_max.append(29)
+            daily_min.append(22)
+            daily_rain.append(20)
+
+    return {
+        'current': {
+            'temperature_2m': _safe_int(current_raw.get('temp_C'), 0),
+            'relative_humidity_2m': _safe_int(current_raw.get('humidity'), 0),
+            'apparent_temperature': _safe_int(current_raw.get('FeelsLikeC'), 0),
+            'weather_code': _wttr_to_wmo(current_raw.get('weatherCode')),
+            'wind_speed_10m': _safe_int(current_raw.get('windspeedKmph'), 0),
+        },
+        'daily': {
+            'time': daily_time,
+            'weather_code': daily_codes,
+            'temperature_2m_max': daily_max,
+            'temperature_2m_min': daily_min,
+            'precipitation_probability_max': daily_rain,
+        }
+    }
+
+
+def _fetch_weather_with_fallback(lat, lng, forecast_days=7):
+    """Fetch weather from Open-Meteo first, then fallback to wttr.in."""
+    import requests as req
+
+    open_meteo_url = (
+        f'https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lng}'
+        f'&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m'
+        f'&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max'
+        f'&timezone=Asia%2FKolkata&forecast_days={forecast_days}'
+    )
+
+    try:
+        resp = req.get(open_meteo_url, timeout=6)
+        resp.raise_for_status()
+        return resp.json(), 'open-meteo', ''
+    except Exception as open_meteo_err:
+        print(f"⚠️  Open-Meteo fallback triggered: {open_meteo_err}")
+
+    try:
+        wttr_url = f'https://wttr.in/{lat},{lng}?format=j1'
+        wttr_resp = req.get(wttr_url, timeout=8, headers={'User-Agent': 'NammaKarnataka/1.0'})
+        wttr_resp.raise_for_status()
+        wttr_data = _build_wttr_weather_payload(wttr_resp.json(), forecast_days)
+        return wttr_data, 'wttr.in', 'Open-Meteo was rate-limited; weather loaded from fallback provider.'
+    except Exception as wttr_err:
+        raise RuntimeError(
+            f'Open-Meteo unavailable and wttr fallback failed: {wttr_err}'
+        )
 
 
 def _haversine_km(lat1, lon1, lat2, lon2):
@@ -1111,29 +1243,36 @@ def package_details(id):
 
 @app.route('/api/weather')
 def get_weather():
-    """Fetch current weather + 7-day forecast using free Open-Meteo API (no key needed)."""
+    """Fetch current weather + 7-day forecast with resilient provider fallback."""
     lat = request.args.get('lat', type=float)
     lng = request.args.get('lng', type=float)
     if lat is None or lng is None:
         return jsonify({'error': 'lat and lng required'}), 400
-    cache_key = f'weather:{lat:.3f},{lng:.3f}'
+    cache_key = _weather_cache_key(lat, lng)
     cached = cache_get(cache_key)
     if cached:
         return jsonify(cached)
+
+    stale = cache_get_stale(cache_key)
+
     try:
-        import requests as req
-        url = (
-            f'https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lng}'
-            f'&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m'
-            f'&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max'
-            f'&timezone=Asia%2FKolkata&forecast_days=7'
-        )
-        resp = req.get(url, timeout=5)
-        resp.raise_for_status()
-        data = resp.json()
-        cache_set(cache_key, data, _CACHE_TTL['weather'])
-        return jsonify(data)
+        data, source, warning = _fetch_weather_with_fallback(lat, lng, forecast_days=7)
+        result = data.copy()
+        if warning:
+            result['data_quality'] = {
+                'provider': source,
+                'warning': warning
+            }
+        cache_set(cache_key, result, _CACHE_TTL['weather'])
+        return jsonify(result)
     except Exception as e:
+        if stale:
+            stale_result = stale.copy()
+            stale_result['data_quality'] = {
+                'stale': True,
+                'warning': 'Live weather provider temporarily unavailable; showing last cached update.'
+            }
+            return jsonify(stale_result)
         return jsonify({'error': str(e)}), 500
 
 
@@ -1243,15 +1382,32 @@ def get_local_trust_score():
     try:
         import requests as req
 
-        # 1) Weather context
-        weather_url = (
-            f'https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lng}'
-            f'&current=weather_code,wind_speed_10m,relative_humidity_2m,temperature_2m'
-            f'&daily=precipitation_probability_max&timezone=Asia%2FKolkata&forecast_days=2'
-        )
-        weather_resp = req.get(weather_url, timeout=6)
-        weather_resp.raise_for_status()
-        weather_data = weather_resp.json()
+        # 1) Weather context (resilient fallback + stale-cache strategy)
+        weather_warning = ''
+        weather_cache_key = _weather_cache_key(lat, lng)
+        weather_data = cache_get(weather_cache_key)
+        if not weather_data:
+            weather_data = cache_get_stale(weather_cache_key)
+
+        if not weather_data:
+            try:
+                weather_data, weather_source, weather_warning = _fetch_weather_with_fallback(lat, lng, forecast_days=2)
+                cache_set(weather_cache_key, weather_data, _CACHE_TTL['weather'])
+                if weather_warning:
+                    weather_warning = f'{weather_warning} Source: {weather_source}.'
+            except Exception as weather_err:
+                weather_warning = f'Weather service unavailable: {weather_err}'
+                weather_data = {
+                    'current': {
+                        'weather_code': 3,
+                        'wind_speed_10m': 14,
+                        'relative_humidity_2m': 65,
+                        'temperature_2m': 27,
+                    },
+                    'daily': {
+                        'precipitation_probability_max': [20]
+                    }
+                }
 
         current = weather_data.get('current', {}) or {}
         daily = weather_data.get('daily', {}) or {}
@@ -1417,6 +1573,10 @@ def get_local_trust_score():
                 'osm_available': False,
                 'warning': 'OSM context temporarily unavailable; score uses weather-priority fallback.'
             }
+        if weather_warning:
+            result.setdefault('data_quality', {})
+            result['data_quality']['weather_available'] = False
+            result['data_quality']['weather_warning'] = weather_warning
 
         cache_set(cache_key, result, _CACHE_TTL['trust_score'])
         return jsonify(result)
