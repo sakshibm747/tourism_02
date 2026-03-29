@@ -293,6 +293,48 @@ def _iter_valid_user_records(all_users):
             yield uid, udata
 
 
+def _normalize_email(value):
+    return str(value or '').strip().lower()
+
+
+def _verify_user_password(user_key, user_data, password):
+    """Verify hashed/legacy passwords and migrate legacy plaintext when possible."""
+    from werkzeug.security import check_password_hash, generate_password_hash
+
+    pwd_hash = (
+        (user_data or {}).get('password_hash')
+        or (user_data or {}).get('passwordHash')
+        or ''
+    )
+    if pwd_hash:
+        try:
+            if check_password_hash(pwd_hash, password):
+                return True
+        except Exception:
+            pass
+
+    legacy_password = (user_data or {}).get('password', '')
+    if isinstance(legacy_password, str) and legacy_password and legacy_password == password:
+        # One-time migration from plaintext to password_hash.
+        patch = {
+            'password_hash': generate_password_hash(password),
+            'password': ''
+        }
+        try:
+            if FIREBASE_ENABLED:
+                firebase_db.reference(f'/users/{user_key}').update(patch)
+            _update_local_user(user_key, patch)
+        except Exception as e:
+            print(f"⚠️  Legacy password migration warning for {user_key}: {e}")
+        try:
+            user_data.update(patch)
+        except Exception:
+            pass
+        return True
+
+    return False
+
+
 def _write_local_users_nolock(users_map):
     os.makedirs(LOCAL_RUNTIME_DIR, exist_ok=True)
     tmp_file = LOCAL_USERS_FILE + '.tmp'
@@ -1856,7 +1898,7 @@ def agency_notifications_mark_read():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        email = request.form.get('email', '').strip()
+        email = _normalize_email(request.form.get('email', ''))
         password = request.form.get('password', '').strip()
         role = (request.form.get('role', 'user') or 'user').strip().lower()
         
@@ -1868,7 +1910,7 @@ def login():
         email_matches = []
         all_users = _get_users_map()
         for uid, udata in _iter_valid_user_records(all_users):
-            if udata.get('email', '').lower() == email.lower():
+            if _normalize_email(udata.get('email', '')) == email:
                 email_matches.append((uid, udata))
 
         if not email_matches:
@@ -1876,8 +1918,6 @@ def login():
             return render_template('login.html')
 
         # Verify password against matched accounts, prioritizing selected role.
-        from werkzeug.security import check_password_hash
-
         prioritized = []
         secondary = []
         for uid, udata in email_matches:
@@ -1891,20 +1931,19 @@ def login():
         user_data = None
 
         for uid, udata in prioritized + secondary:
-            pwd_hash = (udata or {}).get('password_hash', '')
-            if not pwd_hash:
-                continue
-            try:
-                if check_password_hash(pwd_hash, password):
-                    user_key = uid
-                    user_data = udata
-                    break
-            except Exception:
-                continue
+            if _verify_user_password(uid, udata, password):
+                user_key = uid
+                user_data = udata
+                break
 
         if not user_data:
             google_only_account = any(
-                (u.get('auth_provider') == 'google') and not u.get('password_hash')
+                (u.get('auth_provider') == 'google')
+                and not (
+                    u.get('password_hash')
+                    or u.get('passwordHash')
+                    or u.get('password')
+                )
                 for _, u in email_matches
             )
             if google_only_account:
@@ -1934,7 +1973,7 @@ def google_auth():
     """Handle Google OAuth sign-in via Firebase ID token."""
     data = request.get_json(silent=True) or {}
     id_token = data.get('idToken', '')
-    role = data.get('role', 'user')
+    role = (data.get('role', 'user') or 'user').strip().lower()
     
     if not id_token:
         return jsonify({'error': 'No token provided'}), 400
@@ -1951,7 +1990,7 @@ def google_auth():
     try:
         decoded = firebase_auth.verify_id_token(id_token)
         uid = decoded['uid']
-        email = decoded.get('email', '')
+        email = _normalize_email(decoded.get('email', ''))
         name = decoded.get('name', decoded.get('email', 'User'))
         photo = decoded.get('picture', '')
     except Exception as token_err:
@@ -1959,14 +1998,14 @@ def google_auth():
         
         # Method 2: Fallback — use client-provided UID and verify via Firebase Auth
         client_uid = data.get('uid', '')
-        client_email = data.get('email', '')
+        client_email = _normalize_email(data.get('email', ''))
         if client_uid:
             try:
                 fb_user = firebase_auth.get_user(client_uid)
                 # Confirm the email matches what the client sent (prevent spoofing)
-                if fb_user.email and fb_user.email.lower() == client_email.lower():
+                if fb_user.email and _normalize_email(fb_user.email) == client_email:
                     uid = fb_user.uid
-                    email = fb_user.email
+                    email = _normalize_email(fb_user.email)
                     name = fb_user.display_name or fb_user.email or 'User'
                     photo = fb_user.photo_url or ''
                     print(f'Fallback auth succeeded for {email}')
@@ -1983,7 +2022,7 @@ def google_auth():
         # Create or update user record in RTDB
         user_record = {
             'name': name,
-            'email': email.lower(),
+            'email': _normalize_email(email),
             'role': role,
             'photo': photo,
             'auth_provider': 'google',
@@ -1996,7 +2035,7 @@ def google_auth():
             ref = firebase_db.reference('/users')
             all_users = ref.get()
             for ukey, udata in _iter_valid_user_records(all_users):
-                if udata.get('email', '').lower() == email.lower() and udata.get('role') == role:
+                if _normalize_email(udata.get('email', '')) == _normalize_email(email) and (udata.get('role', 'user') or 'user').strip().lower() == role:
                     existing_user_key = ukey
                     break
         except Exception as e:
@@ -2030,7 +2069,7 @@ def google_auth():
 def register():
     if request.method == 'POST':
         name = request.form.get('name', '').strip()
-        email = request.form.get('email', '').strip()
+        email = _normalize_email(request.form.get('email', ''))
         password = request.form.get('password', '').strip()
         role = (request.form.get('role', 'user') or 'user').strip().lower()
         
@@ -2047,7 +2086,7 @@ def register():
         all_users = _get_users_map()
         for uid, udata in _iter_valid_user_records(all_users):
             existing_role = (udata.get('role', 'user') or 'user').strip().lower()
-            if udata.get('email', '').lower() == email.lower() and existing_role == role:
+            if _normalize_email(udata.get('email', '')) == email and existing_role == role:
                 email_exists = True
                 break
         
@@ -2065,7 +2104,7 @@ def register():
         
         user_record = {
             'name': name,
-            'email': email.lower(),
+            'email': email,
             'password_hash': generate_password_hash(password),
             'role': role,
             'created_at': int(time.time())
