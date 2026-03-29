@@ -1827,49 +1827,6 @@ a {
     gap: 8px;
 }
 
-/* ============================================
-   GLOBAL WHATSAPP BUTTON
-   ============================================ */
-.global-whatsapp-btn {
-    position: fixed;
-    right: 18px;
-    bottom: 22px;
-    z-index: 12000;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    background: #25d366;
-    color: #fff;
-    text-decoration: none;
-    padding: 10px 14px;
-    border-radius: 999px;
-    font-weight: 700;
-    font-size: 14px;
-    box-shadow: 0 8px 24px rgba(16, 185, 129, 0.45);
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
-
-.global-whatsapp-btn i {
-    font-size: 18px;
-}
-
-.global-whatsapp-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 12px 28px rgba(16, 185, 129, 0.55);
-}
-
-@media (max-width: 640px) {
-    .global-whatsapp-btn {
-        right: 12px;
-        bottom: 14px;
-        padding: 10px 12px;
-    }
-
-    .global-whatsapp-btn span {
-        display: none;
-    }
-}
-
 .share-toast.show {
     opacity: 1;
     transform: translateX(-50%) translateY(0);

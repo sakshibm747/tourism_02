@@ -13,7 +13,6 @@ import zipfile
 import re
 import math
 from datetime import datetime, timedelta
-from urllib.parse import quote_plus
 import smtplib
 from email.message import EmailMessage
 from werkzeug.utils import secure_filename
@@ -329,19 +328,13 @@ except Exception as e:
 # Make session data available to all templates for dynamic navbar
 @app.context_processor
 def inject_user():
-    support_target = app.config.get('DEFAULT_AGENCY_WHATSAPP_TO') or app.config.get('TWILIO_WHATSAPP_FROM')
-    whatsapp_chat_link = _to_wa_me_link(
-        support_target,
-        'Hi, I need help with my booking on NammaKarnataka.'
-    )
     return dict(
         logged_in=bool(session.get('user_id')),
         user_role=session.get('role', ''),
         user_name=session.get('name', ''),
         firebase_enabled=FIREBASE_ENABLED,
         firebase_web_config=FIREBASE_WEB_CONFIG,
-        notification_poll_ms=app.config.get('NOTIFICATION_POLL_MS', 12000),
-        whatsapp_chat_link=whatsapp_chat_link
+        notification_poll_ms=app.config.get('NOTIFICATION_POLL_MS', 12000)
     )
 
 # Mock Firebase Database
@@ -1107,18 +1100,6 @@ def _normalize_whatsapp_to(value):
             return f'whatsapp:+91{digits_only}'
         return f'whatsapp:+{digits_only}'
     return ''
-
-
-def _to_wa_me_link(value, text=''):
-    normalized = _normalize_whatsapp_to(value)
-    if normalized.startswith('whatsapp:+'):
-        number = normalized.replace('whatsapp:+', '').strip()
-        if text:
-            return f'https://wa.me/{number}?text={quote_plus(text)}'
-        return f'https://wa.me/{number}'
-    if text:
-        return f'https://wa.me/?text={quote_plus(text)}'
-    return 'https://wa.me/'
 
 
 def _resolve_whatsapp_recipient(primary_value, fallback_value):
