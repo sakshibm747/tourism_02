@@ -301,6 +301,11 @@ def _normalize_email(value):
     return str(value or '').strip().lower()
 
 
+def _normalize_role(value):
+    role = str(value or '').strip().lower()
+    return 'agency' if role == 'agency' else 'user'
+
+
 def _verify_user_password(user_key, user_data, password):
     """Verify hashed/legacy passwords and migrate legacy plaintext when possible."""
     from werkzeug.security import check_password_hash, generate_password_hash
@@ -433,6 +438,7 @@ def _find_accounts_by_email(email):
 
 def _resolve_account_for_role(email, role):
     """Resolve account for role, with a single-account fallback for wrong tab picks."""
+    role = _normalize_role(role)
     matches = _find_accounts_by_email(email)
     if not matches:
         return None, None, 'not_found'
@@ -474,6 +480,14 @@ def _touch_last_login(user_key):
             print(f"⚠️  Local last-login update error: {e}")
 
 
+@app.before_request
+def _normalize_session_role():
+    if 'role' in session:
+        normalized = _normalize_role(session.get('role', ''))
+        if session.get('role') != normalized:
+            session['role'] = normalized
+
+
 try:
     sa_info, source = _load_service_account_info()
     if sa_info:
@@ -498,7 +512,7 @@ except Exception as e:
 def inject_user():
     return dict(
         logged_in=bool(session.get('user_id')),
-        user_role=session.get('role', ''),
+        user_role=_normalize_role(session.get('role', '')),
         user_name=session.get('name', ''),
         firebase_enabled=FIREBASE_ENABLED,
         firebase_web_config=FIREBASE_WEB_CONFIG,
@@ -1046,7 +1060,7 @@ def _ensure_hyperlocal_stories(package, persist=False, force=False):
 
 @app.route('/agency/story/regenerate/<id>', methods=['POST'])
 def agency_regenerate_package_stories(id):
-    if session.get('role') != 'agency':
+    if _normalize_role(session.get('role')) != 'agency':
         return jsonify({'error': 'Unauthorized'}), 403
 
     package = db_get_package(id)
@@ -1164,14 +1178,14 @@ def _get_users_map():
 def _get_agency_user(agency_id):
     users = _get_users_map()
     user = users.get(agency_id)
-    if user and user.get('role') == 'agency':
+    if user and _normalize_role(user.get('role')) == 'agency':
         return agency_id, user
     return None, None
 
 
 def _get_all_agency_users():
     users = _get_users_map()
-    return [(uid, udata) for uid, udata in users.items() if udata.get('role') == 'agency']
+    return [(uid, udata) for uid, udata in users.items() if _normalize_role(udata.get('role')) == 'agency']
 
 
 def _save_notification(agency_id, payload):
@@ -1818,7 +1832,7 @@ def book_package():
 
 @app.route('/agency/booking/<booking_id>/approve', methods=['POST'])
 def agency_approve_booking(booking_id):
-    if session.get('role') != 'agency':
+    if _normalize_role(session.get('role')) != 'agency':
         return jsonify({'error': 'Unauthorized'}), 403
     booking = _get_booking(booking_id)
     if not booking:
@@ -1830,7 +1844,7 @@ def agency_approve_booking(booking_id):
 
 @app.route('/agency/booking/<booking_id>/reject', methods=['POST'])
 def agency_reject_booking(booking_id):
-    if session.get('role') != 'agency':
+    if _normalize_role(session.get('role')) != 'agency':
         return jsonify({'error': 'Unauthorized'}), 403
     booking = _get_booking(booking_id)
     if not booking:
@@ -1914,7 +1928,7 @@ def _get_bookings_for_user(user_id):
 
 @app.route('/agency/notifications')
 def agency_notifications():
-    if session.get('role') != 'agency':
+    if _normalize_role(session.get('role')) != 'agency':
         return jsonify({'error': 'Unauthorized'}), 403
     agency_id = session.get('user_id')
     notifications = _get_notifications_for_agency(agency_id, limit=20)
@@ -1924,7 +1938,7 @@ def agency_notifications():
 
 @app.route('/agency/notifications/read', methods=['POST'])
 def agency_notifications_mark_read():
-    if session.get('role') != 'agency':
+    if _normalize_role(session.get('role')) != 'agency':
         return jsonify({'error': 'Unauthorized'}), 403
     agency_id = session.get('user_id')
     data = request.get_json(silent=True) or {}
@@ -1994,7 +2008,13 @@ def login():
             return render_template('login.html')
         
         # Set session
-        authenticated_role = user_data.get('role', 'user')
+        authenticated_role = _normalize_role(user_data.get('role', 'user'))
+        raw_role = str(user_data.get('role', 'user') or 'user')
+        if raw_role != authenticated_role:
+            try:
+                _persist_user_patch(user_key, {'role': authenticated_role})
+            except Exception as e:
+                print(f"⚠️  Role normalization write warning for {user_key}: {e}")
         session['user_id'] = user_key
         session['role'] = authenticated_role
         session['name'] = user_data.get('name', 'User')
@@ -2325,7 +2345,7 @@ def logout():
 @app.route('/profile')
 def profile():
     # Check if a user is logged in
-    if session.get('role') != 'user':
+    if _normalize_role(session.get('role')) != 'user':
         flash('Please login as a user to access this page.', 'error')
         return redirect(url_for('login'))
     
@@ -2357,7 +2377,7 @@ def profile():
 @app.route('/agency')
 def agency_dashboard():
     # Check if an agency is logged in
-    if session.get('role') != 'agency':
+    if _normalize_role(session.get('role')) != 'agency':
         flash('Please login as an agency to access this page.', 'error')
         return redirect(url_for('login'))
     
@@ -2526,7 +2546,7 @@ def _build_bookings_csv(bookings):
 
 @app.route('/agency/export/csv')
 def agency_export_csv():
-    if session.get('role') != 'agency':
+    if _normalize_role(session.get('role')) != 'agency':
         flash('Please login as an agency to export data.', 'error')
         return redirect(url_for('login'))
 
@@ -2585,7 +2605,7 @@ def agency_export_csv():
 
 @app.route('/agency/add', methods=['POST'])
 def agency_add_package():
-    if session.get('role') != 'agency':
+    if _normalize_role(session.get('role')) != 'agency':
         flash('Please login as an agency.', 'error')
         return redirect(url_for('login'))
     
@@ -2722,7 +2742,7 @@ def agency_add_package():
 
 @app.route('/agency/delete/<id>', methods=['POST'])
 def agency_delete_package(id):
-    if session.get('role') != 'agency':
+    if _normalize_role(session.get('role')) != 'agency':
         flash('Please login as an agency.', 'error')
         return redirect(url_for('login'))
     
@@ -2745,7 +2765,7 @@ def agency_delete_package(id):
 
 @app.route('/agency/edit/<id>', methods=['GET'])
 def agency_edit_package_form(id):
-    if session.get('role') != 'agency':
+    if _normalize_role(session.get('role')) != 'agency':
         flash('Please login as an agency.', 'error')
         return redirect(url_for('login'))
     
@@ -2762,7 +2782,7 @@ def agency_edit_package_form(id):
 
 @app.route('/agency/edit/<id>', methods=['POST'])
 def agency_edit_package(id):
-    if session.get('role') != 'agency':
+    if _normalize_role(session.get('role')) != 'agency':
         flash('Please login as an agency.', 'error')
         return redirect(url_for('login'))
     
