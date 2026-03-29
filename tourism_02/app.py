@@ -303,7 +303,15 @@ def _normalize_email(value):
 
 def _normalize_role(value):
     role = str(value or '').strip().lower()
-    return 'agency' if role == 'agency' else 'user'
+    if not role:
+        return 'user'
+
+    compact = role.replace('_', ' ').replace('-', ' ')
+    if 'agency' in compact or 'operator' in compact or 'vendor' in compact:
+        return 'agency'
+    if compact in ('user', 'customer', 'traveler', 'traveller', 'tourist'):
+        return 'user'
+    return 'user'
 
 
 def _verify_user_password(user_key, user_data, password):
@@ -1959,7 +1967,7 @@ def login():
     if request.method == 'POST':
         email = _normalize_email(request.form.get('email', ''))
         password = request.form.get('password', '').strip()
-        role = (request.form.get('role', 'user') or 'user').strip().lower()
+        role = _normalize_role(request.form.get('role', 'user'))
         
         if not email or not password:
             flash('Email and password are required.', 'error')
@@ -2034,7 +2042,7 @@ def google_auth():
     """Handle Google OAuth sign-in via Firebase ID token."""
     data = request.get_json(silent=True) or {}
     id_token = data.get('idToken', '')
-    role = (data.get('role', 'user') or 'user').strip().lower()
+    role = _normalize_role(data.get('role', 'user'))
     
     if not id_token:
         return jsonify({'error': 'No token provided'}), 400
@@ -2131,7 +2139,7 @@ def google_auth():
 def forgot_password_request():
     data = request.get_json(silent=True) or {}
     email = _normalize_email(data.get('email', ''))
-    role = (data.get('role', 'user') or 'user').strip().lower()
+    role = _normalize_role(data.get('role', 'user'))
 
     if not email:
         return jsonify({'error': 'Email is required.'}), 400
@@ -2186,7 +2194,7 @@ def forgot_password_request():
 def forgot_password_verify():
     data = request.get_json(silent=True) or {}
     email = _normalize_email(data.get('email', ''))
-    role = (data.get('role', 'user') or 'user').strip().lower()
+    role = _normalize_role(data.get('role', 'user'))
     otp = str(data.get('otp', '')).strip()
     new_password = str(data.get('new_password', '')).strip()
 
@@ -2264,7 +2272,7 @@ def register():
         name = request.form.get('name', '').strip()
         email = _normalize_email(request.form.get('email', ''))
         password = request.form.get('password', '').strip()
-        role = (request.form.get('role', 'user') or 'user').strip().lower()
+        role = _normalize_role(request.form.get('role', 'user'))
         
         if not name or not email or not password:
             flash('All fields are required.', 'error')
