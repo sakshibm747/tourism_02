@@ -1776,15 +1776,18 @@ def login():
         # Look up user in Firebase Realtime Database
         user_data = None
         user_key = None
+        email_matches = []
         if FIREBASE_ENABLED:
             try:
                 ref = firebase_db.reference('/users')
                 all_users = ref.get()
                 for uid, udata in _iter_valid_user_records(all_users):
-                    if udata.get('email', '').lower() == email.lower() and udata.get('role') == role:
-                        user_data = udata
-                        user_key = uid
-                        break
+                    if udata.get('email', '').lower() == email.lower():
+                        email_matches.append((uid, udata))
+                        if udata.get('role') == role:
+                            user_data = udata
+                            user_key = uid
+                            break
             except Exception as e:
                 print(f"⚠️  Firebase auth error: {e}")
                 flash('An error occurred. Please try again.', 'error')
@@ -1792,10 +1795,21 @@ def login():
         else:
             # Fallback: check in-memory users
             for uid, udata in MOCK_DATABASE.get('users', {}).items():
-                if udata.get('email', '').lower() == email.lower() and udata.get('role') == role:
-                    user_data = udata
-                    user_key = uid
-                    break
+                if udata.get('email', '').lower() == email.lower():
+                    email_matches.append((uid, udata))
+                    if udata.get('role') == role:
+                        user_data = udata
+                        user_key = uid
+                        break
+
+        # If role tab is wrong but email matches exactly one account, login using that account.
+        if not user_data and len(email_matches) == 1:
+            user_key, user_data = email_matches[0]
+
+        # If same email has multiple role accounts and none matched selected role, ask user to pick role tab.
+        if not user_data and len(email_matches) > 1:
+            flash('This email exists in multiple roles. Please select the correct role tab (Customer/Agency).', 'error')
+            return render_template('login.html')
         
         if not user_data:
             flash('Account not found. Please register first or check your role tab.', 'error')
@@ -1808,12 +1822,13 @@ def login():
             return render_template('login.html')
         
         # Set session
+        authenticated_role = user_data.get('role', 'user')
         session['user_id'] = user_key
-        session['role'] = user_data.get('role', 'user')
+        session['role'] = authenticated_role
         session['name'] = user_data.get('name', 'User')
         _touch_last_login(user_key)
         
-        if role == 'agency':
+        if authenticated_role == 'agency':
             flash(f'Welcome back, {user_data["name"]}!', 'success')
             return redirect(url_for('agency_dashboard'))
         else:
