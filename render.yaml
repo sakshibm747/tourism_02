@@ -5,3 +5,10 @@ services:
     rootDir: tourism_02
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app
+    envVars:
+      - key: UPLOAD_PERSISTENT_DIR
+        value: /var/data/uploads
+    disks:
+      - name: uploads
+        mountPath: /var/data
+        sizeGB: 1

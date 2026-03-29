@@ -19,7 +19,7 @@
         {% for pkg in results %}
         <div class="deal-card" onclick="window.location.href='/package/{{ pkg.id }}'" style="min-width: unset; cursor: pointer;">
             <img src="{{ pkg.image }}" alt="{{ pkg.title }}" loading="lazy" decoding="async"
-                onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1518182170546-0766de6b6aad?auto=format&fit=crop&w=500&q=80';">
+                onerror="this.onerror=null; this.src='{{ url_for('static', filename='images/placeholder-package.svg') }}';">
             <div class="deal-info">
                 <span class="deal-tag">{{ pkg.tag }}</span>
                 <h3>{{ pkg.title }}</h3>
