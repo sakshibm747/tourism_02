@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, session, redirect, url_for, flash, jsonify, Response
+from flask import Flask, render_template, request, session, redirect, url_for, flash, jsonify, Response, send_from_directory
 from config import Config
 import firebase_admin
 from firebase_admin import credentials, db as firebase_db, auth as firebase_auth
@@ -257,6 +257,104 @@ def save_uploaded_files(files, allowed_ext):
                 f.save(os.path.join(UPLOAD_FOLDER, unique_name))
             urls.append(f'/static/uploads/{unique_name}')
     return urls
+
+
+def _normalize_media_url(value):
+    """Normalize package media links to browser-safe URLs."""
+    if not isinstance(value, str):
+        return ''
+
+    raw = value.strip()
+    if not raw:
+        return ''
+
+    normalized = raw.replace('\\', '/')
+    lowered = normalized.lower()
+
+    if lowered.startswith(('http://', 'https://', 'data:', 'blob:')):
+        return normalized
+    if lowered.startswith('//'):
+        return f'https:{normalized}'
+    if lowered.startswith('www.'):
+        return f'https://{normalized}'
+
+    # Handle absolute local paths that include /static/uploads/... or /uploads/...
+    static_idx = lowered.find('/static/uploads/')
+    if static_idx >= 0:
+        return normalized[static_idx:]
+
+    uploads_idx = lowered.find('/uploads/')
+    if uploads_idx >= 0:
+        return normalized[uploads_idx:]
+
+    if lowered.startswith('static/uploads/'):
+        return '/' + normalized.lstrip('/')
+    if lowered.startswith('/static/uploads/'):
+        return normalized
+    if lowered.startswith('uploads/'):
+        return '/' + normalized.lstrip('/')
+    if lowered.startswith('/uploads/'):
+        return normalized
+
+    if lowered.startswith('./'):
+        trimmed = normalized[2:]
+        trimmed_lower = trimmed.lower()
+        if trimmed_lower.startswith(('static/uploads/', 'uploads/')):
+            return '/' + trimmed.lstrip('/')
+        normalized = trimmed
+
+    if '/' not in normalized and re.match(r'^[A-Za-z0-9_.-]+\.(png|jpe?g|gif|webp)$', normalized, re.IGNORECASE):
+        return f'/static/uploads/{normalized}'
+
+    if normalized.startswith('/'):
+        return normalized
+
+    return normalized
+
+
+def _normalize_media_list(values):
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, list):
+        return []
+
+    normalized_values = []
+    seen = set()
+    for value in values:
+        cleaned = _normalize_media_url(value)
+        if not cleaned or cleaned in seen:
+            continue
+        normalized_values.append(cleaned)
+        seen.add(cleaned)
+    return normalized_values
+
+
+def _normalize_package_media(package):
+    if not isinstance(package, dict):
+        return package
+
+    image = _normalize_media_url(package.get('image', ''))
+    images = _normalize_media_list(package.get('images', []))
+    gallery = _normalize_media_list(package.get('gallery', []))
+
+    if not image and images:
+        image = images[0]
+    if not image and gallery:
+        image = gallery[0]
+
+    if image:
+        images = [image] + [u for u in images if u != image]
+        if not gallery:
+            gallery = [image]
+
+    package['image'] = image
+    package['images'] = images
+    package['gallery'] = gallery
+
+    if 'package_image' in package:
+        package['package_image'] = _normalize_media_url(package.get('package_image', ''))
+
+    return package
 
 # --- Firebase Initialization (Realtime Database — free Spark plan) ---
 FIREBASE_ENABLED = False
@@ -780,6 +878,7 @@ def db_get_all_packages():
     recent_booking_map = _get_recent_bookings_map()
     for pkg in data.values():
         if isinstance(pkg, dict):
+            _normalize_package_media(pkg)
             _attach_carbon_score(pkg)
             _attach_recent_booking_label(pkg, recent_booking_map)
     return data
@@ -798,6 +897,7 @@ def db_get_package(pkg_id):
         data = MOCK_DATABASE['packages'].get(pkg_id)
 
     if isinstance(data, dict):
+        _normalize_package_media(data)
         _attach_carbon_score(data)
         _attach_recent_booking_label(data)
         _ensure_hyperlocal_stories(data, persist=not bool(data.get('hyperlocal_stories')))
@@ -855,6 +955,7 @@ def db_get_packages_by_agency(agency_id):
                 recent_booking_map = _get_recent_bookings_map()
                 for pkg in packages:
                     if isinstance(pkg, dict):
+                        _normalize_package_media(pkg)
                         _attach_carbon_score(pkg)
                         _attach_recent_booking_label(pkg, recent_booking_map)
                 return packages
@@ -865,6 +966,7 @@ def db_get_packages_by_agency(agency_id):
     recent_booking_map = _get_recent_bookings_map()
     for pkg in packages:
         if isinstance(pkg, dict):
+            _normalize_package_media(pkg)
             _attach_carbon_score(pkg)
             _attach_recent_booking_label(pkg, recent_booking_map)
     return packages
@@ -1403,6 +1505,12 @@ def _dispatch_booking_alerts(booking):
 @app.route('/')
 def index():
     return render_template('index.html')
+
+
+@app.route('/uploads/<path:filename>')
+def uploaded_media(filename):
+    """Backward-compatible route for legacy media URLs stored as /uploads/..."""
+    return send_from_directory(UPLOAD_FOLDER, filename)
 
 @app.route('/api/packages')
 def get_packages():
@@ -2623,7 +2731,7 @@ def agency_add_package():
     old_price = request.form.get('old_price', '0').strip()
     tag = request.form.get('tag', 'Adventure').strip()
     transport_type = request.form.get('transport_type', 'mixed').strip().lower()
-    image_url = request.form.get('image_url', '').strip()
+    image_url = _normalize_media_url(request.form.get('image_url', '').strip())
     
     # Parse day-by-day itinerary from form
     day_count = int(request.form.get('day_count', '0') or '0')
@@ -2655,6 +2763,7 @@ def agency_add_package():
     video_raw = request.form.get('video_urls', '').strip()
     if gallery_raw:
         gallery_urls += [u.strip() for u in gallery_raw.splitlines() if u.strip()]
+    gallery_urls = _normalize_media_list(gallery_urls)
     if video_raw:
         video_urls += [u.strip() for u in video_raw.splitlines() if u.strip()]
     
@@ -2667,6 +2776,7 @@ def agency_add_package():
         saved = save_uploaded_files([main_image_file], ALLOWED_IMG_EXT)
         if saved:
             image_url = saved[0]
+    image_url = _normalize_media_url(image_url)
     
     # Parse ambient sound type
     ambient_type = request.form.get('ambient_sound', '').strip()
@@ -2809,7 +2919,7 @@ def agency_edit_package(id):
     old_price = request.form.get('old_price', '0').strip()
     tag = request.form.get('tag', 'Adventure').strip()
     transport_type = request.form.get('transport_type', (package.get('transport_type') or 'mixed')).strip().lower()
-    image_url = request.form.get('image_url', '').strip()
+    image_url = _normalize_media_url(request.form.get('image_url', '').strip())
     
     # Parse day-by-day itinerary from form
     day_count = int(request.form.get('day_count', '0') or '0')
@@ -2844,6 +2954,7 @@ def agency_edit_package(id):
         saved = save_uploaded_files([main_image_file], ALLOWED_IMG_EXT)
         if saved:
             image_url = saved[0]
+    image_url = _normalize_media_url(image_url)
     # Parse ambient sound type
     ambient_type = request.form.get('ambient_sound', '').strip()
     ambient_sound = None
@@ -2904,10 +3015,11 @@ def agency_edit_package(id):
     # Handle existing gallery (after removals by user)
     existing_gallery_raw = request.form.get('existing_gallery_urls', '').strip()
     existing_gallery = [u.strip() for u in existing_gallery_raw.splitlines() if u.strip()] if existing_gallery_raw else []
+    existing_gallery = _normalize_media_list(existing_gallery)
     
     # Merge: existing gallery (with removals applied) + newly uploaded files
     new_uploads_only = save_uploaded_files(request.files.getlist('gallery_files'), ALLOWED_IMG_EXT)
-    final_gallery = existing_gallery + new_uploads_only
+    final_gallery = _normalize_media_list(existing_gallery + new_uploads_only)
     if final_gallery:
         update_data['gallery'] = final_gallery
     else:
