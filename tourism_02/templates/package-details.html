@@ -1,5 +1,10 @@
 {% extends "base.html" %}
 
+{% set fallback_image = 'https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?auto=format&fit=crop&w=1200&q=80' %}
+{% set primary_media = package.gallery[0] if package.gallery else (package.images[0] if package.images else package.image) %}
+{% set cover_image = primary_media if primary_media else fallback_image %}
+{% set media_total = (package.gallery|length) + (package.videos|length if package.videos else 0) %}
+
 {% block head_extra %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.fullscreen/3.0.2/Control.FullScreen.css" />
@@ -41,14 +46,14 @@
 <meta property="og:type" content="website" />
 <meta property="og:title" content="{{ package.title }} — NammaKarnataka" />
 <meta property="og:description" content="{{ package.description[:160] }}" />
-<meta property="og:image" content="{{ request.url_root.rstrip('/') }}{{ package.gallery[0] if package.gallery else package.images[0] }}" />
+<meta property="og:image" content="{{ request.url_root.rstrip('/') }}{{ cover_image }}" />
 <meta property="og:url" content="{{ request.url }}" />
 <meta property="og:site_name" content="NammaKarnataka Tourism" />
 <!-- Twitter Card -->
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="{{ package.title }} — NammaKarnataka" />
 <meta name="twitter:description" content="{{ package.description[:160] }}" />
-<meta name="twitter:image" content="{{ request.url_root.rstrip('/') }}{{ package.gallery[0] if package.gallery else package.images[0] }}" />
+<meta name="twitter:image" content="{{ request.url_root.rstrip('/') }}{{ cover_image }}" />
 {% endblock %}
 
 {% block content %}
@@ -60,8 +65,9 @@
             <i class="fas fa-chevron-left"></i>
         </button>
         <div class="gallery-main" id="gallery-main">
-            <img id="gallery-main-img" src="{{ package.gallery[0] if package.gallery else package.images[0] }}"
-                alt="{{ package.title }}" onclick="openLightbox()" fetchpriority="high">
+            <img id="gallery-main-img" src="{{ cover_image }}"
+                alt="{{ package.title }}" onclick="openLightbox()" fetchpriority="high"
+                onerror="this.onerror=null; this.src='{{ fallback_image }}';">
         </div>
         <button class="gallery-nav-btn gallery-next" onclick="galleryNav(1)" aria-label="Next">
             <i class="fas fa-chevron-right"></i>
@@ -73,8 +79,7 @@
         </div>
         <!-- Media Counter -->
         <div class="gallery-counter" id="gallery-counter">
-            <i class="fas fa-images"></i> <span id="counter-text">1 / {{ (package.gallery|length) +
-                (package.videos|length if package.videos else 0) }}</span>
+            <i class="fas fa-images"></i> <span id="counter-text">1 / {{ media_total if media_total > 0 else 1 }}</span>
         </div>
     </div>
 
@@ -83,7 +88,8 @@
         {% for img in package.gallery %}
         <div class="gallery-thumb {% if loop.first %}active{% endif %}" data-index="{{ loop.index0 }}" data-type="image"
             data-src="{{ img }}" onclick="selectThumb(this)">
-            <img src="{{ img }}" alt="Gallery {{ loop.index }}" loading="lazy">
+            <img src="{{ img }}" alt="Gallery {{ loop.index }}" loading="lazy"
+                onerror="this.onerror=null; this.src='{{ fallback_image }}';">
         </div>
         {% endfor %}
         {% if package.videos %}
@@ -837,6 +843,7 @@
     hydrateVideoThumbnails();
 
     function updateMainDisplay(index) {
+        if (totalItems === 0) return;
         currentIndex = index;
         const item = galleryItems[index];
         const mainEl = document.getElementById('gallery-main');
@@ -844,7 +851,7 @@
         if (item.type === 'video') {
             renderVideoInMain(mainEl, item.src);
         } else {
-            mainEl.innerHTML = `<img id="gallery-main-img" src="${item.src}" alt="Gallery" onclick="openLightbox()">`;
+            mainEl.innerHTML = `<img id="gallery-main-img" src="${item.src}" alt="Gallery" onclick="openLightbox()" onerror="this.onerror=null; this.src='{{ fallback_image }}';">`;
         }
 
         // Update counter
@@ -868,11 +875,14 @@
     }
 
     function selectThumb(el) {
+        if (totalItems === 0) return;
         const index = parseInt(el.dataset.index);
+        if (Number.isNaN(index)) return;
         updateMainDisplay(index);
     }
 
     function galleryNav(dir) {
+        if (totalItems === 0) return;
         let newIndex = currentIndex + dir;
         if (newIndex < 0) newIndex = totalItems - 1;
         if (newIndex >= totalItems) newIndex = 0;
@@ -881,6 +891,7 @@
 
     // Lightbox
     function openLightbox() {
+        if (totalItems === 0) return;
         const item = galleryItems[currentIndex];
         if (item.type === 'video') return; // don't open lightbox for videos
         const lb = document.getElementById('gallery-lightbox');

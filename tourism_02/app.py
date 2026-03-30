@@ -192,7 +192,12 @@ def _haversine_km(lat1, lon1, lat2, lon2):
 app.secret_key = 'demo_secret_key_for_tourism_app'  # Required for session storage
 
 # --- File Upload Config ---
-UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_UPLOAD_FOLDER = os.path.join(BASE_DIR, 'static', 'uploads')
+UPLOAD_FOLDER = os.environ.get('UPLOAD_PERSISTENT_DIR', '').strip() or DEFAULT_UPLOAD_FOLDER
+if not os.path.isabs(UPLOAD_FOLDER):
+    UPLOAD_FOLDER = os.path.join(BASE_DIR, UPLOAD_FOLDER)
+UPLOAD_PUBLIC_PREFIX = '/uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB max
@@ -210,6 +215,11 @@ PASSWORD_RESET_MAX_ATTEMPTS = 5
 
 def allowed_file(filename, allowed_ext):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_ext
+
+
+def _upload_public_url(relative_path):
+    clean = str(relative_path or '').replace('\\', '/').lstrip('/')
+    return f'{UPLOAD_PUBLIC_PREFIX}/{clean}'
 
 def optimize_image(file_obj, max_width=1920, max_height=1080, quality=90):
     """Resize and compress image for high-quality display without blur."""
@@ -255,7 +265,7 @@ def save_uploaded_files(files, allowed_ext):
             else:
                 unique_name = f'{uuid.uuid4().hex}.{ext}'
                 f.save(os.path.join(UPLOAD_FOLDER, unique_name))
-            urls.append(f'/static/uploads/{unique_name}')
+            urls.append(_upload_public_url(unique_name))
     return urls
 
 
@@ -281,16 +291,19 @@ def _normalize_media_url(value):
     # Handle absolute local paths that include /static/uploads/... or /uploads/...
     static_idx = lowered.find('/static/uploads/')
     if static_idx >= 0:
-        return normalized[static_idx:]
+        tail = normalized[static_idx + len('/static/uploads/'):]
+        return _upload_public_url(tail)
 
     uploads_idx = lowered.find('/uploads/')
     if uploads_idx >= 0:
         return normalized[uploads_idx:]
 
     if lowered.startswith('static/uploads/'):
-        return '/' + normalized.lstrip('/')
+        tail = normalized[len('static/uploads/'):]
+        return _upload_public_url(tail)
     if lowered.startswith('/static/uploads/'):
-        return normalized
+        tail = normalized[len('/static/uploads/'):]
+        return _upload_public_url(tail)
     if lowered.startswith('uploads/'):
         return '/' + normalized.lstrip('/')
     if lowered.startswith('/uploads/'):
@@ -299,12 +312,14 @@ def _normalize_media_url(value):
     if lowered.startswith('./'):
         trimmed = normalized[2:]
         trimmed_lower = trimmed.lower()
-        if trimmed_lower.startswith(('static/uploads/', 'uploads/')):
+        if trimmed_lower.startswith('static/uploads/'):
+            return _upload_public_url(trimmed[len('static/uploads/'):])
+        if trimmed_lower.startswith('uploads/'):
             return '/' + trimmed.lstrip('/')
         normalized = trimmed
 
     if '/' not in normalized and re.match(r'^[A-Za-z0-9_.-]+\.(png|jpe?g|gif|webp)$', normalized, re.IGNORECASE):
-        return f'/static/uploads/{normalized}'
+        return _upload_public_url(normalized)
 
     if normalized.startswith('/'):
         return normalized
@@ -1104,7 +1119,7 @@ def _generate_story_audio_file(pkg_id, story_idx, narration, force=False):
     safe_pkg = _story_safe_slug(pkg_id)
     filename = f'{safe_pkg}-story-{story_idx + 1}.mp3'
     abs_path = os.path.join(STORY_AUDIO_FOLDER, filename)
-    rel_url = f'/static/uploads/stories/{filename}'
+    rel_url = _upload_public_url(f'stories/{filename}')
 
     if os.path.exists(abs_path) and not force:
         return rel_url
