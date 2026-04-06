@@ -1151,6 +1151,7 @@ def db_get_all_packages():
         if isinstance(pkg, dict):
             _normalize_package_media(pkg)
             _attach_carbon_score(pkg)
+            _attach_food_trail(pkg)
             _attach_recent_booking_label(pkg, recent_booking_map)
     return data
 
@@ -1170,6 +1171,7 @@ def db_get_package(pkg_id):
     if isinstance(data, dict):
         _normalize_package_media(data)
         _attach_carbon_score(data)
+        _attach_food_trail(data)
         _attach_recent_booking_label(data)
         _ensure_hyperlocal_stories(data, persist=not bool(data.get('hyperlocal_stories')))
     return data
@@ -1228,6 +1230,7 @@ def db_get_packages_by_agency(agency_id):
                     if isinstance(pkg, dict):
                         _normalize_package_media(pkg)
                         _attach_carbon_score(pkg)
+                        _attach_food_trail(pkg)
                         _attach_recent_booking_label(pkg, recent_booking_map)
                 return packages
             return []
@@ -1239,6 +1242,7 @@ def db_get_packages_by_agency(agency_id):
         if isinstance(pkg, dict):
             _normalize_package_media(pkg)
             _attach_carbon_score(pkg)
+            _attach_food_trail(pkg)
             _attach_recent_booking_label(pkg, recent_booking_map)
     return packages
 
@@ -1553,6 +1557,192 @@ def _attach_carbon_score(package):
     transport = _infer_transport_type(package)
     package['transport_type'] = transport
     package['carbon_score'] = _calculate_carbon_score(package.get('duration', ''), transport)
+    return package
+
+
+_FOOD_TRAIL_LIBRARY = {
+    'karnataka': [
+        {'name': 'Bisi Bele Bath', 'type': 'veg', 'note': 'Comforting rice-lentil classic with spice and ghee.'},
+        {'name': 'Mysore Pak', 'type': 'veg', 'note': 'Rich gram-flour sweet with a melt-in-mouth finish.'},
+        {'name': 'Ragi Mudde with Soppu Saaru', 'type': 'veg', 'note': 'Traditional millet ball served with leafy curry.'},
+        {'name': 'Koli Saaru', 'type': 'non-veg', 'note': 'Peppery chicken curry loved in many Karnataka homes.'},
+    ],
+    'mysuru': [
+        {'name': 'Mysore Masala Dosa', 'type': 'veg', 'note': 'Crisp dosa with spicy chutney layer and potato filling.'},
+        {'name': 'Mysore Pak', 'type': 'veg', 'note': 'Signature sweet from old royal kitchens.'},
+        {'name': 'Nanjangud Banana Bajji', 'type': 'veg', 'note': 'Local-style fritter, ideal for evening snack breaks.'},
+        {'name': 'Mutton Chops', 'type': 'non-veg', 'note': 'Spiced, slow-cooked side served in classic military hotels.'},
+    ],
+    'chikmagalur': [
+        {'name': 'Akki Roti', 'type': 'veg', 'note': 'Rustic rice flatbread served hot with chutney.'},
+        {'name': 'Neer Dosa', 'type': 'veg', 'note': 'Soft lace-like dosa that pairs with coconut gravies.'},
+        {'name': 'Filter Coffee', 'type': 'veg', 'note': 'Estate-fresh brew, a must in coffee country.'},
+        {'name': 'Chicken Ghee Roast', 'type': 'non-veg', 'note': 'Bold roast with red chilli and aromatic spices.'},
+    ],
+    'coorg': [
+        {'name': 'Kadambuttu', 'type': 'veg', 'note': 'Steamed rice dumplings, a hallmark Coorg side.'},
+        {'name': 'Pandi Curry', 'type': 'non-veg', 'note': 'Famous Coorg-style pork curry with kachampuli tang.'},
+        {'name': 'Bamboo Shoot Curry', 'type': 'veg', 'note': 'Seasonal hill delicacy with earthy flavor.'},
+        {'name': 'Noolputtu with Curry', 'type': 'veg', 'note': 'String hoppers enjoyed with coconut-based curries.'},
+    ],
+    'hampi': [
+        {'name': 'Jolada Rotti', 'type': 'veg', 'note': 'North Karnataka sorghum flatbread served with ennegayi.'},
+        {'name': 'Ennegayi', 'type': 'veg', 'note': 'Stuffed brinjal curry rich in roasted spice paste.'},
+        {'name': 'Shenga Chutney Pudi', 'type': 'veg', 'note': 'Nutty dry chutney powder, great with rotis.'},
+        {'name': 'Kharabath Mutton', 'type': 'non-veg', 'note': 'Local spicy meat style popular in this region.'},
+    ],
+    'gokarna': [
+        {'name': 'Bangude Pulimunchi', 'type': 'non-veg', 'note': 'Coastal fish curry with tangy chilli profile.'},
+        {'name': 'Kane Rava Fry', 'type': 'non-veg', 'note': 'Crispy semolina fish fry from seaside kitchens.'},
+        {'name': 'Patrode', 'type': 'veg', 'note': 'Steamed colocasia-leaf rolls with spiced rice mix.'},
+        {'name': 'Mangalorean Buns', 'type': 'veg', 'note': 'Sweet-savoury banana buns for tea-time snacking.'},
+    ],
+    'bandipur': [
+        {'name': 'Ragi Mudde with Bassaru', 'type': 'veg', 'note': 'Hearty millet meal ideal before safari stretches.'},
+        {'name': 'Avarekai Saaru', 'type': 'veg', 'note': 'Bean-forward curry with village-style seasoning.'},
+        {'name': 'Country Chicken Saaru', 'type': 'non-veg', 'note': 'Lightly spiced curry common in forest-side homestays.'},
+        {'name': 'Kesari Bath', 'type': 'veg', 'note': 'Classic sweet ending for a local breakfast plate.'},
+    ],
+    'sakleshpur': [
+        {'name': 'Malnad Gulla Palya', 'type': 'veg', 'note': 'Native brinjal curry from Malnad home kitchens.'},
+        {'name': 'Kesuvina Soppu Curry', 'type': 'veg', 'note': 'Leafy hill-special dish with coconut spice base.'},
+        {'name': 'Chicken Sukka', 'type': 'non-veg', 'note': 'Dry roast-style chicken with pepper and curry leaves.'},
+        {'name': 'Filter Coffee', 'type': 'veg', 'note': 'Must-have hill-station coffee between viewpoints.'},
+    ],
+    'bengaluru': [
+        {'name': 'Thatte Idli', 'type': 'veg', 'note': 'Soft plate-sized idli popular in old Bengaluru joints.'},
+        {'name': 'Benne Masala Dosa', 'type': 'veg', 'note': 'Butter-heavy dosa with crisp edges and rich center.'},
+        {'name': 'Donne Biryani', 'type': 'non-veg', 'note': 'Iconic biryani served in eco leaf bowls.'},
+        {'name': 'Maddur Vada', 'type': 'veg', 'note': 'Crunchy onion vada, perfect for road trips nearby.'},
+    ],
+}
+
+
+def _normalize_food_type(value):
+    label = str(value or '').strip().lower()
+    if label in ('veg', 'vegetarian', 'v'):
+        return 'veg'
+    if label in ('non-veg', 'non veg', 'nonveg', 'nv', 'non vegetarian', 'non-vegetarian'):
+        return 'non-veg'
+    return 'veg'
+
+
+def _normalize_food_trail(food_items):
+    if isinstance(food_items, dict):
+        food_items = [food_items]
+    if not isinstance(food_items, list):
+        return []
+
+    cleaned_items = []
+    seen = set()
+    for item in food_items:
+        if isinstance(item, str):
+            dish_name = item.strip()
+            dish_type = 'veg'
+            dish_note = ''
+        elif isinstance(item, dict):
+            dish_name = str(item.get('name', '')).strip()
+            dish_type = _normalize_food_type(item.get('type', 'veg'))
+            dish_note = str(item.get('note', '')).strip()
+        else:
+            continue
+
+        if not dish_name:
+            continue
+
+        key = f"{dish_name.lower()}::{dish_type}"
+        if key in seen:
+            continue
+
+        cleaned_items.append({'name': dish_name, 'type': dish_type, 'note': dish_note})
+        seen.add(key)
+
+        if len(cleaned_items) >= 8:
+            break
+
+    return cleaned_items
+
+
+def _parse_food_trail_form(raw_text):
+    """Parse dashboard textarea lines into food trail objects.
+
+    Expected line format:
+    Dish Name | veg/non-veg | short note
+    """
+    text = str(raw_text or '').strip()
+    if not text:
+        return []
+
+    items = []
+    for line in text.splitlines():
+        row = line.strip()
+        if not row:
+            continue
+
+        if '|' in row:
+            parts = [p.strip() for p in row.split('|', 2)]
+        elif ',' in row:
+            parts = [p.strip() for p in row.split(',', 2)]
+        else:
+            parts = [row, 'veg', '']
+
+        dish_name = parts[0] if len(parts) >= 1 else ''
+        dish_type = parts[1] if len(parts) >= 2 else 'veg'
+        dish_note = parts[2] if len(parts) >= 3 else ''
+
+        if dish_name:
+            items.append({'name': dish_name, 'type': dish_type, 'note': dish_note})
+
+    return _normalize_food_trail(items)
+
+
+def _resolve_food_trail_key(package):
+    location = package.get('location', {}) if isinstance(package.get('location', {}), dict) else {}
+    location_name = str(location.get('name', '')).strip()
+    haystack = ' '.join([
+        str(package.get('title', '')),
+        str(package.get('description', '')),
+        str(package.get('tag', '')),
+        location_name,
+    ]).lower()
+
+    keyword_map = [
+        ('mysuru', 'mysuru'),
+        ('mysore', 'mysuru'),
+        ('chikmagalur', 'chikmagalur'),
+        ('chikkamagaluru', 'chikmagalur'),
+        ('coorg', 'coorg'),
+        ('kodagu', 'coorg'),
+        ('hampi', 'hampi'),
+        ('gokarna', 'gokarna'),
+        ('bandipur', 'bandipur'),
+        ('sakleshpur', 'sakleshpur'),
+        ('bengaluru', 'bengaluru'),
+        ('bangalore', 'bengaluru'),
+    ]
+
+    for needle, region_key in keyword_map:
+        if needle in haystack:
+            return region_key
+
+    tag_text = str(package.get('tag', '')).strip().lower()
+    if 'coastal' in tag_text:
+        return 'gokarna'
+    if 'wildlife' in tag_text:
+        return 'bandipur'
+    return 'karnataka'
+
+
+def _attach_food_trail(package):
+    custom_food_trail = _normalize_food_trail(package.get('food_trail', []))
+    if custom_food_trail:
+        package['food_trail'] = custom_food_trail
+        return package
+
+    region_key = _resolve_food_trail_key(package)
+    package['food_trail'] = _normalize_food_trail(
+        _FOOD_TRAIL_LIBRARY.get(region_key, _FOOD_TRAIL_LIBRARY.get('karnataka', []))
+    )
     return package
 
 
@@ -3150,6 +3340,7 @@ def agency_add_package():
     
     features_raw = request.form.get('features', '').strip()
     features_list = [f.strip() for f in features_raw.splitlines() if f.strip()] if features_raw else []
+    food_trail_list = _parse_food_trail_form(request.form.get('food_trail', ''))
     
     # Handle main image upload
     main_image_file = request.files.get('main_image_file')
@@ -3202,6 +3393,7 @@ def agency_add_package():
         'gallery': gallery_urls,
         'videos': video_urls,
         'features': features_list,
+        'food_trail': food_trail_list,
         'ambient_sound': ambient_sound,
         'tags': [tag],
         'location': {
@@ -3328,6 +3520,8 @@ def agency_edit_package(id):
     
     features_raw = request.form.get('features', '').strip()
     features_list = [f.strip() for f in features_raw.splitlines() if f.strip()] if features_raw else []
+    food_trail_raw = request.form.get('food_trail', '')
+    food_trail_list = _parse_food_trail_form(food_trail_raw)
     
     # Handle main image upload
     main_image_file = request.files.get('main_image_file')
@@ -3412,6 +3606,12 @@ def agency_edit_package(id):
     
     if features_list:
         update_data['features'] = features_list
+
+    # Food trail can be explicitly managed by agency via textarea input.
+    if str(food_trail_raw).strip():
+        update_data['food_trail'] = food_trail_list
+    elif 'food_trail' in package:
+        update_data['food_trail'] = []
     
     # Recalculate discount
     if update_data['old_price'] > update_data['price']:

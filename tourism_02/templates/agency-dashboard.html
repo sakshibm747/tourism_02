@@ -323,6 +323,16 @@
                 <textarea name="features" rows="3" placeholder="Meals Included&#10;AC Transport&#10;Guided Tour"
                     style="width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 8px; outline: none; font-size: 14px; resize: vertical;"></textarea>
             </div>
+            <div style="margin-top: 15px;">
+                <label
+                    style="font-size: 13px; font-weight: 600; color: var(--text-dark); display: block; margin-bottom: 5px;">
+                    <i class="fas fa-utensils" style="color: #d97706; margin-right: 5px;"></i>Food Trail Badges
+                    <span style="color: #999; font-weight: 400;">(Dish | veg/non-veg | note)</span>
+                </label>
+                <textarea name="food_trail" rows="4"
+                    placeholder="Mysore Masala Dosa | veg | Crispy dosa with spicy chutney&#10;Donne Biryani | non-veg | Iconic leaf-bowl biryani"
+                    style="width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 8px; outline: none; font-size: 13px; resize: vertical;"></textarea>
+            </div>
             <!-- Map Location -->
             <div style="margin-top: 15px;">
                 <label
@@ -801,6 +811,15 @@
                 <textarea id="edit-features" name="features" rows="3"
                     style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px; resize: vertical;"></textarea>
             </div>
+            <div style="margin-top: 15px;">
+                <label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 5px;">
+                    <i class="fas fa-utensils" style="color: #d97706; margin-right: 5px;"></i>Food Trail Badges
+                    <span style="color: #999; font-weight: 400; font-size: 11px;">(Dish | veg/non-veg | note)</span>
+                </label>
+                <textarea id="edit-food-trail" name="food_trail" rows="4"
+                    placeholder="Mysore Masala Dosa | veg | Crispy dosa with spicy chutney"
+                    style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 13px; resize: vertical;"></textarea>
+            </div>
             <!-- Map Location -->
             <div style="margin-top: 15px;">
                 <label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 5px;">
@@ -1034,6 +1053,19 @@
         document.getElementById('delete-modal').style.display = 'none';
     }
 
+    function formatFoodTrailForTextarea(foodTrailItems) {
+        if (!Array.isArray(foodTrailItems) || foodTrailItems.length === 0) return '';
+        return foodTrailItems.map(function(item) {
+            var name = (item && item.name ? String(item.name) : '').replace(/[\n\r|]/g, ' ').trim();
+            var type = (item && item.type ? String(item.type) : 'veg').replace(/[\n\r|]/g, ' ').trim() || 'veg';
+            var note = (item && item.note ? String(item.note) : '').replace(/[\n\r|]/g, ' ').trim();
+            return [name, type, note].filter(function(part, idx) {
+                if (idx === 0) return part.length > 0;
+                return true;
+            }).join(' | ');
+        }).filter(function(line) { return line.trim().length > 0; }).join('\n');
+    }
+
     // ── Edit ──
     function editPackage(id) {
         fetch('/api/package/' + id)
@@ -1058,6 +1090,7 @@
                 document.getElementById('edit-gallery').value = (pkg.gallery || []).join('\n');
                 document.getElementById('edit-videos').value = (pkg.videos || []).join('\n');
                 document.getElementById('edit-features').value = (pkg.features || []).join('\n');
+                document.getElementById('edit-food-trail').value = formatFoodTrailForTextarea(pkg.food_trail || []);
                 document.getElementById('edit-ambient').value = (pkg.ambient_sound && pkg.ambient_sound.type) ? pkg.ambient_sound.type : '';
 
                 // Show current main image thumbnail with remove button
