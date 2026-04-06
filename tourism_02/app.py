@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, session, redirect, url_for, flash, jsonify, Response, send_from_directory
 from config import Config
 import firebase_admin
-from firebase_admin import credentials, db as firebase_db, auth as firebase_auth
+from firebase_admin import credentials, db as firebase_db, auth as firebase_auth, storage as firebase_storage
 from firebase_config import FIREBASE_WEB_CONFIG
 import os
 import json
@@ -12,8 +12,10 @@ import csv
 import zipfile
 import re
 import math
+import mimetypes
 import threading
 import secrets
+from urllib.parse import quote, urlparse
 from datetime import datetime, timedelta
 import smtplib
 from email.message import EmailMessage
@@ -206,6 +208,9 @@ ALLOWED_VID_EXT = {'mp4', 'webm', 'mov'}
 STORY_AUDIO_FOLDER = os.path.join(UPLOAD_FOLDER, 'stories')
 os.makedirs(STORY_AUDIO_FOLDER, exist_ok=True)
 
+if os.environ.get('RENDER') and not os.environ.get('UPLOAD_PERSISTENT_DIR', '').strip():
+    print('⚠️  UPLOAD_PERSISTENT_DIR is not set on Render. Local uploads may be ephemeral across restarts.')
+
 LOCAL_RUNTIME_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runtime_data')
 LOCAL_USERS_FILE = os.path.join(LOCAL_RUNTIME_DIR, 'users.json')
 _LOCAL_USERS_LOCK = threading.Lock()
@@ -220,6 +225,63 @@ def allowed_file(filename, allowed_ext):
 def _upload_public_url(relative_path):
     clean = str(relative_path or '').replace('\\', '/').lstrip('/')
     return f'{UPLOAD_PUBLIC_PREFIX}/{clean}'
+
+
+def _guess_content_type(filename, fallback='application/octet-stream'):
+    guessed, _ = mimetypes.guess_type(str(filename or ''), strict=False)
+    return guessed or fallback
+
+
+def _firebase_download_url(bucket_name, object_name, token):
+    encoded_name = quote(str(object_name or ''), safe='')
+    return f'https://firebasestorage.googleapis.com/v0/b/{bucket_name}/o/{encoded_name}?alt=media&token={token}'
+
+
+def _upload_to_firebase_storage(content_bytes, object_name, content_type):
+    """Upload bytes to Firebase Storage and return a tokenized public URL."""
+    if not FIREBASE_STORAGE_ENABLED:
+        return ''
+
+    try:
+        bucket = firebase_storage.bucket(name=FIREBASE_STORAGE_BUCKET)
+        blob = bucket.blob(object_name)
+        token = uuid.uuid4().hex
+        blob.metadata = {'firebaseStorageDownloadTokens': token}
+        blob.cache_control = 'public, max-age=31536000'
+        blob.upload_from_string(content_bytes, content_type=content_type)
+        blob.patch()
+        return _firebase_download_url(FIREBASE_STORAGE_BUCKET, object_name, token)
+    except Exception as e:
+        print(f"⚠️  Firebase Storage upload error for {object_name}: {e}")
+        return ''
+
+
+def _firebase_object_url_if_exists(object_name):
+    """Return Firebase Storage download URL for existing object, else empty string."""
+    if not FIREBASE_STORAGE_ENABLED:
+        return ''
+
+    try:
+        bucket = firebase_storage.bucket(name=FIREBASE_STORAGE_BUCKET)
+        blob = bucket.blob(object_name)
+        if not blob.exists():
+            return ''
+
+        blob.reload()
+        metadata = blob.metadata or {}
+        token_field = str(metadata.get('firebaseStorageDownloadTokens', '') or '')
+        token = token_field.split(',')[0].strip() if token_field else ''
+
+        if not token:
+            token = uuid.uuid4().hex
+            metadata['firebaseStorageDownloadTokens'] = token
+            blob.metadata = metadata
+            blob.patch()
+
+        return _firebase_download_url(FIREBASE_STORAGE_BUCKET, object_name, token)
+    except Exception as e:
+        print(f"⚠️  Firebase Storage lookup error for {object_name}: {e}")
+        return ''
 
 def optimize_image(file_obj, max_width=1920, max_height=1080, quality=90):
     """Resize and compress image for high-quality display without blur."""
@@ -246,25 +308,49 @@ def optimize_image(file_obj, max_width=1920, max_height=1080, quality=90):
         return None
 
 def save_uploaded_files(files, allowed_ext):
-    """Save uploaded files with optimization and return list of URL paths."""
+    """Save uploaded files and return public URLs (cloud-first, local fallback)."""
     urls = []
     for f in files:
         if f and f.filename and allowed_file(f.filename, allowed_ext):
             ext = f.filename.rsplit('.', 1)[1].lower()
-            # Optimize images for high-quality display
+            unique_name = ''
+            content_bytes = b''
+            content_type = _guess_content_type(f.filename)
+
+            # Optimize images for high-quality display.
             if ext in ALLOWED_IMG_EXT:
                 optimized = optimize_image(f)
                 if optimized:
                     unique_name = f'{uuid.uuid4().hex}.jpg'
-                    save_path = os.path.join(UPLOAD_FOLDER, unique_name)
-                    with open(save_path, 'wb') as out:
-                        out.write(optimized.read())
+                    content_bytes = optimized.read()
+                    content_type = 'image/jpeg'
                 else:
                     unique_name = f'{uuid.uuid4().hex}.{ext}'
-                    f.save(os.path.join(UPLOAD_FOLDER, unique_name))
+                    try:
+                        f.seek(0)
+                    except Exception:
+                        pass
+                    content_bytes = f.read()
             else:
                 unique_name = f'{uuid.uuid4().hex}.{ext}'
-                f.save(os.path.join(UPLOAD_FOLDER, unique_name))
+                try:
+                    f.seek(0)
+                except Exception:
+                    pass
+                content_bytes = f.read()
+
+            if not content_bytes:
+                continue
+
+            cloud_url = _upload_to_firebase_storage(content_bytes, unique_name, content_type)
+            if cloud_url:
+                urls.append(cloud_url)
+                continue
+
+            # Local fallback (works with Render disk or local dev).
+            save_path = os.path.join(UPLOAD_FOLDER, unique_name)
+            with open(save_path, 'wb') as out:
+                out.write(content_bytes)
             urls.append(_upload_public_url(unique_name))
     return urls
 
@@ -371,8 +457,157 @@ def _normalize_package_media(package):
 
     return package
 
+
+def _extract_upload_object_name(media_url):
+    """Extract storage object key from /uploads or /static/uploads URL/path."""
+    if not isinstance(media_url, str):
+        return ''
+
+    raw = media_url.strip()
+    if not raw:
+        return ''
+
+    try:
+        parsed = urlparse(raw)
+        candidate = parsed.path if (parsed.scheme or parsed.netloc) else raw
+    except Exception:
+        candidate = raw
+
+    normalized = candidate.replace('\\', '/').strip()
+    lowered = normalized.lower()
+
+    object_name = ''
+    static_marker = '/static/uploads/'
+    uploads_marker = '/uploads/'
+    if static_marker in lowered:
+        idx = lowered.find(static_marker)
+        object_name = normalized[idx + len(static_marker):]
+    elif uploads_marker in lowered:
+        idx = lowered.find(uploads_marker)
+        object_name = normalized[idx + len(uploads_marker):]
+    elif lowered.startswith('static/uploads/'):
+        object_name = normalized[len('static/uploads/'):]
+    elif lowered.startswith('uploads/'):
+        object_name = normalized[len('uploads/'):]
+
+    object_name = object_name.split('?', 1)[0].split('#', 1)[0].strip().lstrip('/')
+    if not object_name:
+        return ''
+
+    # Normalize and reject traversal-like paths.
+    segments = [seg for seg in object_name.split('/') if seg and seg != '.']
+    if any(seg == '..' for seg in segments):
+        return ''
+    return '/'.join(segments)
+
+
+def _migrate_media_url_to_cloud(media_url):
+    """Migrate one upload URL/path to Firebase Storage URL if possible."""
+    cleaned = _normalize_media_url(media_url)
+    if not cleaned:
+        return '', 'empty'
+
+    object_name = _extract_upload_object_name(cleaned)
+    if not object_name:
+        return cleaned, 'external'
+
+    existing_cloud_url = _firebase_object_url_if_exists(object_name)
+    if existing_cloud_url:
+        return existing_cloud_url, 'already_cloud'
+
+    local_path = os.path.join(UPLOAD_FOLDER, *object_name.split('/'))
+    if not os.path.exists(local_path):
+        return cleaned, 'missing_local'
+
+    try:
+        with open(local_path, 'rb') as f:
+            content = f.read()
+    except Exception:
+        return cleaned, 'read_failed'
+
+    if not content:
+        return cleaned, 'missing_local'
+
+    cloud_url = _upload_to_firebase_storage(content, object_name, _guess_content_type(object_name))
+    if cloud_url:
+        return cloud_url, 'uploaded'
+    return cleaned, 'upload_failed'
+
+
+def _migrate_package_media_to_cloud(package):
+    """Return (patch, stats) for one package media migration run."""
+    stats = {
+        'scanned': 0,
+        'uploaded': 0,
+        'already_cloud': 0,
+        'external': 0,
+        'missing_local': 0,
+        'read_failed': 0,
+        'upload_failed': 0,
+        'empty': 0,
+    }
+
+    if not isinstance(package, dict):
+        return {}, stats
+
+    old_image = _normalize_media_url(package.get('image', ''))
+    old_images = _normalize_media_list(package.get('images', []))
+    old_gallery = _normalize_media_list(package.get('gallery', []))
+
+    migrated_image, status = _migrate_media_url_to_cloud(old_image)
+    stats['scanned'] += 1
+    stats[status] = stats.get(status, 0) + 1
+
+    migrated_images = []
+    image_sources = package.get('images', [])
+    if isinstance(image_sources, str):
+        image_sources = [image_sources]
+    for item in image_sources if isinstance(image_sources, list) else []:
+        migrated, status = _migrate_media_url_to_cloud(item)
+        stats['scanned'] += 1
+        stats[status] = stats.get(status, 0) + 1
+        if migrated:
+            migrated_images.append(migrated)
+
+    migrated_gallery = []
+    gallery_sources = package.get('gallery', [])
+    if isinstance(gallery_sources, str):
+        gallery_sources = [gallery_sources]
+    for item in gallery_sources if isinstance(gallery_sources, list) else []:
+        migrated, status = _migrate_media_url_to_cloud(item)
+        stats['scanned'] += 1
+        stats[status] = stats.get(status, 0) + 1
+        if migrated:
+            migrated_gallery.append(migrated)
+
+    migrated_images = _normalize_media_list(migrated_images)
+    migrated_gallery = _normalize_media_list(migrated_gallery)
+    migrated_image = _normalize_media_url(migrated_image)
+
+    if not migrated_image and migrated_images:
+        migrated_image = migrated_images[0]
+    if not migrated_image and migrated_gallery:
+        migrated_image = migrated_gallery[0]
+
+    if migrated_image:
+        migrated_images = [migrated_image] + [u for u in migrated_images if u != migrated_image]
+        if not migrated_gallery:
+            migrated_gallery = [migrated_image]
+
+    patch = {}
+    if migrated_image != old_image:
+        patch['image'] = migrated_image
+    if migrated_images != old_images:
+        patch['images'] = migrated_images
+    if migrated_gallery != old_gallery:
+        patch['gallery'] = migrated_gallery
+
+    return patch, stats
+
 # --- Firebase Initialization (Realtime Database — free Spark plan) ---
 FIREBASE_ENABLED = False
+FIREBASE_STORAGE_ENABLED = False
+FIREBASE_STORAGE_BUCKET = ''
 
 def _load_service_account_info():
     """Load Firebase service account from file (local) or env (Render)."""
@@ -398,6 +633,15 @@ def _resolve_database_url(project_id):
         os.environ.get('FIREBASE_DATABASE_URL', '').strip()
         or FIREBASE_WEB_CONFIG.get('databaseURL', '').strip()
         or f'https://{project_id}-default-rtdb.asia-southeast1.firebasedatabase.app'
+    )
+
+
+def _resolve_storage_bucket(project_id):
+    """Resolve Firebase Storage bucket from env/config with project fallback."""
+    return (
+        os.environ.get('FIREBASE_STORAGE_BUCKET', '').strip()
+        or FIREBASE_WEB_CONFIG.get('storageBucket', '').strip()
+        or f'{project_id}.appspot.com'
     )
 
 
@@ -614,18 +858,30 @@ try:
     if sa_info:
         project_id = sa_info.get('project_id', 'my-project')
         db_url = _resolve_database_url(project_id)
+        storage_bucket = _resolve_storage_bucket(project_id)
         cred = credentials.Certificate(sa_info)
-        firebase_admin.initialize_app(cred, {'databaseURL': db_url})
+        firebase_admin.initialize_app(cred, {
+            'databaseURL': db_url,
+            'storageBucket': storage_bucket,
+        })
         FIREBASE_ENABLED = True
+        FIREBASE_STORAGE_BUCKET = storage_bucket
+        FIREBASE_STORAGE_ENABLED = bool(storage_bucket)
         print(f"✅ Firebase Realtime Database initialized via {source}.")
         print(f"   Database URL: {db_url}")
+        if FIREBASE_STORAGE_ENABLED:
+            print(f"✅ Firebase Storage enabled with bucket: {FIREBASE_STORAGE_BUCKET}")
+        else:
+            print("ℹ️  Firebase Storage bucket not configured; uploads will use local storage fallback.")
     else:
         print("ℹ️  Firebase credentials not found. Running in MOCK mode.")
         print("   Add FIREBASE_SERVICE_ACCOUNT_JSON on Render to enable realtime DB writes.")
+        print("   Add FIREBASE_STORAGE_BUCKET and/or storageBucket config to persist uploads in cloud storage.")
         print(f"   Using local auth store: {LOCAL_USERS_FILE}")
 except Exception as e:
     print(f"⚠️  Firebase initialization failed: {e}")
     print("   Running in MOCK mode (in-memory database)")
+    print("   Uploads will use local disk fallback unless Firebase initialization succeeds.")
     print(f"   Using local auth store: {LOCAL_USERS_FILE}")
 
 # Make session data available to all templates for dynamic navbar
@@ -1118,8 +1374,31 @@ def _build_hyperlocal_story_scripts(package):
 def _generate_story_audio_file(pkg_id, story_idx, narration, force=False):
     safe_pkg = _story_safe_slug(pkg_id)
     filename = f'{safe_pkg}-story-{story_idx + 1}.mp3'
+    cloud_object = f'stories/{filename}'
     abs_path = os.path.join(STORY_AUDIO_FOLDER, filename)
     rel_url = _upload_public_url(f'stories/{filename}')
+
+    if FIREBASE_STORAGE_ENABLED:
+        if not force:
+            existing_url = _firebase_object_url_if_exists(cloud_object)
+            if existing_url:
+                return existing_url
+
+        if not GTTS_AVAILABLE:
+            return ''
+
+        try:
+            tts = gTTS(text=narration, lang='en', slow=False)
+            audio_buffer = io.BytesIO()
+            tts.write_to_fp(audio_buffer)
+            audio_bytes = audio_buffer.getvalue()
+            if not audio_bytes:
+                return ''
+            cloud_url = _upload_to_firebase_storage(audio_bytes, cloud_object, 'audio/mpeg')
+            if cloud_url:
+                return cloud_url
+        except Exception as e:
+            print(f"⚠️  Story audio cloud generation error: {e}")
 
     if os.path.exists(abs_path) and not force:
         return rel_url
@@ -1524,12 +1803,34 @@ def index():
 
 @app.route('/uploads/<path:filename>')
 def uploaded_media(filename):
-    """Backward-compatible route for legacy media URLs stored as /uploads/..."""
-    return send_from_directory(UPLOAD_FOLDER, filename)
+    """Serve uploaded media from local disk, then Firebase Storage fallback."""
+    safe_name = str(filename or '').replace('\\', '/').lstrip('/')
+    local_path = os.path.join(UPLOAD_FOLDER, *safe_name.split('/'))
+
+    if os.path.exists(local_path):
+        return send_from_directory(UPLOAD_FOLDER, safe_name)
+
+    cloud_url = _firebase_object_url_if_exists(safe_name)
+    if cloud_url:
+        return redirect(cloud_url)
+
+    return 'File not found', 404
 
 @app.route('/api/packages')
 def get_packages():
     return db_get_all_packages()
+
+
+@app.route('/api/media-storage-status')
+def media_storage_status():
+    return jsonify({
+        'firebase_database_enabled': FIREBASE_ENABLED,
+        'firebase_storage_enabled': FIREBASE_STORAGE_ENABLED,
+        'firebase_storage_bucket': FIREBASE_STORAGE_BUCKET,
+        'upload_public_prefix': UPLOAD_PUBLIC_PREFIX,
+        'upload_folder': UPLOAD_FOLDER,
+        'upload_persistent_dir_env': os.environ.get('UPLOAD_PERSISTENT_DIR', '').strip(),
+    })
 
 @app.route('/api/package/<id>')
 def api_get_package(id):
@@ -2733,6 +3034,71 @@ def agency_export_csv():
         mimetype='text/csv; charset=utf-8',
         headers={'Content-Disposition': f'attachment; filename="{filename}"'}
     )
+
+
+@app.route('/agency/media/migrate', methods=['GET', 'POST'])
+def agency_migrate_media_to_cloud():
+    if _normalize_role(session.get('role')) != 'agency':
+        return jsonify({'success': False, 'error': 'Please login as an agency.'}), 401
+
+    if request.method == 'GET' and request.args.get('run') != '1':
+        return jsonify({
+            'success': False,
+            'message': 'Call this endpoint with POST or GET ?run=1 to execute migration.',
+            'example': '/agency/media/migrate?run=1',
+        }), 400
+
+    if not FIREBASE_STORAGE_ENABLED:
+        return jsonify({
+            'success': False,
+            'error': 'Firebase Storage is not enabled. Configure FIREBASE_STORAGE_BUCKET and credentials first.',
+        }), 503
+
+    agency_id = session.get('user_id')
+    packages = db_get_packages_by_agency(agency_id)
+
+    aggregate = {
+        'scanned': 0,
+        'uploaded': 0,
+        'already_cloud': 0,
+        'external': 0,
+        'missing_local': 0,
+        'read_failed': 0,
+        'upload_failed': 0,
+        'empty': 0,
+    }
+    updated_packages = 0
+    unchanged_packages = 0
+    failed_updates = []
+
+    for pkg in packages:
+        pkg_id = str((pkg or {}).get('id', '')).strip()
+        if not pkg_id:
+            continue
+
+        patch, stats = _migrate_package_media_to_cloud(pkg)
+        for key, value in stats.items():
+            aggregate[key] = aggregate.get(key, 0) + int(value)
+
+        if not patch:
+            unchanged_packages += 1
+            continue
+
+        if db_update_package(pkg_id, patch):
+            updated_packages += 1
+        else:
+            failed_updates.append(pkg_id)
+
+    return jsonify({
+        'success': True,
+        'agency_id': agency_id,
+        'total_packages': len(packages),
+        'updated_packages': updated_packages,
+        'unchanged_packages': unchanged_packages,
+        'failed_updates': failed_updates,
+        'url_stats': aggregate,
+        'note': 'Run once after enabling Firebase Storage to convert old /uploads paths to durable cloud URLs.',
+    })
 
 @app.route('/agency/add', methods=['POST'])
 def agency_add_package():
