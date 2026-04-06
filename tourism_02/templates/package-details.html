@@ -124,7 +124,7 @@
         <div class="gallery-main" id="gallery-main">
             <img id="gallery-main-img" src="{{ cover_image }}"
                 alt="{{ package.title }}" onclick="openLightbox()" fetchpriority="high"
-                onerror="this.onerror=null; this.src='{{ fallback_image }}';">
+                onerror="this.onerror=null; this.style.display='none';">
         </div>
         <button class="gallery-nav-btn gallery-next" onclick="galleryNav(1)" aria-label="Next">
             <i class="fas fa-chevron-right"></i>
@@ -146,7 +146,7 @@
         <div class="gallery-thumb {% if loop.first %}active{% endif %}" data-index="{{ loop.index0 }}" data-type="image"
             data-src="{{ img }}" onclick="selectThumb(this)">
             <img src="{{ img }}" alt="Gallery {{ loop.index }}" loading="lazy"
-                onerror="this.onerror=null; this.src='{{ fallback_image }}';">
+                onerror="this.onerror=null; this.closest('.gallery-thumb').style.display='none'; this.closest('.gallery-thumb').dataset.broken='1';">
         </div>
         {% endfor %}
         {% if package.videos %}
@@ -815,6 +815,8 @@
     // Gallery data
     const galleryItems = [];
     document.querySelectorAll('.gallery-thumb').forEach(thumb => {
+        if (thumb.dataset.broken === '1') return;
+        if (!thumb.dataset.src) return;
         galleryItems.push({
             type: thumb.dataset.type,
             src: thumb.dataset.src
@@ -932,7 +934,7 @@
         if (item.type === 'video') {
             renderVideoInMain(mainEl, item.src);
         } else {
-            mainEl.innerHTML = `<img id="gallery-main-img" src="${item.src}" alt="Gallery" onclick="openLightbox()" onerror="this.onerror=null; this.src='{{ fallback_image }}';">`;
+            mainEl.innerHTML = `<img id="gallery-main-img" src="${item.src}" alt="Gallery" onclick="openLightbox()" onerror="this.onerror=null; this.style.display='none';">`;
         }
 
         // Update counter
