@@ -237,23 +237,55 @@ def _firebase_download_url(bucket_name, object_name, token):
     return f'https://firebasestorage.googleapis.com/v0/b/{bucket_name}/o/{encoded_name}?alt=media&token={token}'
 
 
+def _iter_storage_bucket_candidates():
+    seen = set()
+    for name in FIREBASE_STORAGE_BUCKET_CANDIDATES:
+        candidate = str(name or '').strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        yield candidate
+
+    fallback = str(FIREBASE_STORAGE_BUCKET or '').strip()
+    if fallback and fallback not in seen:
+        yield fallback
+
+
+def _promote_storage_bucket(bucket_name):
+    global FIREBASE_STORAGE_BUCKET_CANDIDATES, FIREBASE_STORAGE_BUCKET
+    normalized = str(bucket_name or '').strip()
+    if not normalized:
+        return
+
+    FIREBASE_STORAGE_BUCKET = normalized
+    existing = [b for b in FIREBASE_STORAGE_BUCKET_CANDIDATES if b != normalized]
+    FIREBASE_STORAGE_BUCKET_CANDIDATES = [normalized] + existing
+
+
 def _upload_to_firebase_storage(content_bytes, object_name, content_type):
     """Upload bytes to Firebase Storage and return a tokenized public URL."""
     if not FIREBASE_STORAGE_ENABLED:
         return ''
 
-    try:
-        bucket = firebase_storage.bucket(name=FIREBASE_STORAGE_BUCKET)
-        blob = bucket.blob(object_name)
-        token = uuid.uuid4().hex
-        blob.metadata = {'firebaseStorageDownloadTokens': token}
-        blob.cache_control = 'public, max-age=31536000'
-        blob.upload_from_string(content_bytes, content_type=content_type)
-        blob.patch()
-        return _firebase_download_url(FIREBASE_STORAGE_BUCKET, object_name, token)
-    except Exception as e:
-        print(f"⚠️  Firebase Storage upload error for {object_name}: {e}")
-        return ''
+    last_error = ''
+    for bucket_name in _iter_storage_bucket_candidates():
+        try:
+            bucket = firebase_storage.bucket(name=bucket_name)
+            blob = bucket.blob(object_name)
+            token = uuid.uuid4().hex
+            blob.metadata = {'firebaseStorageDownloadTokens': token}
+            blob.cache_control = 'public, max-age=31536000'
+            blob.upload_from_string(content_bytes, content_type=content_type)
+            blob.patch()
+            _promote_storage_bucket(bucket_name)
+            return _firebase_download_url(bucket_name, object_name, token)
+        except Exception as e:
+            last_error = str(e)
+            print(f"⚠️  Firebase Storage upload error for {object_name} in bucket {bucket_name}: {e}")
+
+    if last_error:
+        print(f"⚠️  Firebase Storage upload failed for all buckets: {last_error}")
+    return ''
 
 
 def _firebase_object_url_if_exists(object_name):
@@ -261,27 +293,30 @@ def _firebase_object_url_if_exists(object_name):
     if not FIREBASE_STORAGE_ENABLED:
         return ''
 
-    try:
-        bucket = firebase_storage.bucket(name=FIREBASE_STORAGE_BUCKET)
-        blob = bucket.blob(object_name)
-        if not blob.exists():
-            return ''
+    for bucket_name in _iter_storage_bucket_candidates():
+        try:
+            bucket = firebase_storage.bucket(name=bucket_name)
+            blob = bucket.blob(object_name)
+            if not blob.exists():
+                continue
 
-        blob.reload()
-        metadata = blob.metadata or {}
-        token_field = str(metadata.get('firebaseStorageDownloadTokens', '') or '')
-        token = token_field.split(',')[0].strip() if token_field else ''
+            blob.reload()
+            metadata = blob.metadata or {}
+            token_field = str(metadata.get('firebaseStorageDownloadTokens', '') or '')
+            token = token_field.split(',')[0].strip() if token_field else ''
 
-        if not token:
-            token = uuid.uuid4().hex
-            metadata['firebaseStorageDownloadTokens'] = token
-            blob.metadata = metadata
-            blob.patch()
+            if not token:
+                token = uuid.uuid4().hex
+                metadata['firebaseStorageDownloadTokens'] = token
+                blob.metadata = metadata
+                blob.patch()
 
-        return _firebase_download_url(FIREBASE_STORAGE_BUCKET, object_name, token)
-    except Exception as e:
-        print(f"⚠️  Firebase Storage lookup error for {object_name}: {e}")
-        return ''
+            _promote_storage_bucket(bucket_name)
+            return _firebase_download_url(bucket_name, object_name, token)
+        except Exception as e:
+            print(f"⚠️  Firebase Storage lookup error for {object_name} in bucket {bucket_name}: {e}")
+
+    return ''
 
 def optimize_image(file_obj, max_width=1920, max_height=1080, quality=90):
     """Resize and compress image for high-quality display without blur."""
@@ -367,6 +402,14 @@ def _normalize_media_url(value):
     normalized = raw.replace('\\', '/')
     lowered = normalized.lower()
 
+    # Handle legacy typo paths like /upload/file.jpg
+    if '/static/upload/' in lowered:
+        normalized = re.sub(r'/static/upload/', '/static/uploads/', normalized, flags=re.IGNORECASE)
+        lowered = normalized.lower()
+    if '/upload/' in lowered:
+        normalized = re.sub(r'/upload/', '/uploads/', normalized, flags=re.IGNORECASE)
+        lowered = normalized.lower()
+
     if lowered.startswith(('http://', 'https://', 'data:', 'blob:')):
         return normalized
     if lowered.startswith('//'):
@@ -390,6 +433,18 @@ def _normalize_media_url(value):
     if lowered.startswith('/static/uploads/'):
         tail = normalized[len('/static/uploads/'):]
         return _upload_public_url(tail)
+    if lowered.startswith('static/upload/'):
+        tail = normalized[len('static/upload/'):]
+        return _upload_public_url(tail)
+    if lowered.startswith('/static/upload/'):
+        tail = normalized[len('/static/upload/'):]
+        return _upload_public_url(tail)
+    if lowered.startswith('upload/'):
+        tail = normalized[len('upload/'):]
+        return _upload_public_url(tail)
+    if lowered.startswith('/upload/'):
+        tail = normalized[len('/upload/'):]
+        return _upload_public_url(tail)
     if lowered.startswith('uploads/'):
         return '/' + normalized.lstrip('/')
     if lowered.startswith('/uploads/'):
@@ -400,6 +455,10 @@ def _normalize_media_url(value):
         trimmed_lower = trimmed.lower()
         if trimmed_lower.startswith('static/uploads/'):
             return _upload_public_url(trimmed[len('static/uploads/'):])
+        if trimmed_lower.startswith('static/upload/'):
+            return _upload_public_url(trimmed[len('static/upload/'):])
+        if trimmed_lower.startswith('upload/'):
+            return _upload_public_url(trimmed[len('upload/'):])
         if trimmed_lower.startswith('uploads/'):
             return '/' + trimmed.lstrip('/')
         normalized = trimmed
@@ -459,7 +518,7 @@ def _normalize_package_media(package):
 
 
 def _extract_upload_object_name(media_url):
-    """Extract storage object key from /uploads or /static/uploads URL/path."""
+    """Extract storage object key from /uploads, /upload, /static/uploads, or /static/upload paths."""
     if not isinstance(media_url, str):
         return ''
 
@@ -478,17 +537,29 @@ def _extract_upload_object_name(media_url):
 
     object_name = ''
     static_marker = '/static/uploads/'
+    static_typo_marker = '/static/upload/'
     uploads_marker = '/uploads/'
+    upload_typo_marker = '/upload/'
     if static_marker in lowered:
         idx = lowered.find(static_marker)
         object_name = normalized[idx + len(static_marker):]
+    elif static_typo_marker in lowered:
+        idx = lowered.find(static_typo_marker)
+        object_name = normalized[idx + len(static_typo_marker):]
     elif uploads_marker in lowered:
         idx = lowered.find(uploads_marker)
         object_name = normalized[idx + len(uploads_marker):]
+    elif upload_typo_marker in lowered:
+        idx = lowered.find(upload_typo_marker)
+        object_name = normalized[idx + len(upload_typo_marker):]
     elif lowered.startswith('static/uploads/'):
         object_name = normalized[len('static/uploads/'):]
+    elif lowered.startswith('static/upload/'):
+        object_name = normalized[len('static/upload/'):]
     elif lowered.startswith('uploads/'):
         object_name = normalized[len('uploads/'):]
+    elif lowered.startswith('upload/'):
+        object_name = normalized[len('upload/'):]
 
     object_name = object_name.split('?', 1)[0].split('#', 1)[0].strip().lstrip('/')
     if not object_name:
@@ -608,6 +679,8 @@ def _migrate_package_media_to_cloud(package):
 FIREBASE_ENABLED = False
 FIREBASE_STORAGE_ENABLED = False
 FIREBASE_STORAGE_BUCKET = ''
+FIREBASE_STORAGE_BUCKET_CANDIDATES = []
+FIREBASE_PROJECT_ID = ''
 
 def _load_service_account_info():
     """Load Firebase service account from file (local) or env (Render)."""
@@ -636,13 +709,18 @@ def _resolve_database_url(project_id):
     )
 
 
-def _resolve_storage_bucket(project_id):
-    """Resolve Firebase Storage bucket from env/config with project fallback."""
-    return (
-        os.environ.get('FIREBASE_STORAGE_BUCKET', '').strip()
-        or FIREBASE_WEB_CONFIG.get('storageBucket', '').strip()
-        or f'{project_id}.appspot.com'
-    )
+def _resolve_storage_bucket_candidates(project_id):
+    """Resolve ordered bucket candidates (env, config, and common Firebase defaults)."""
+    candidates = []
+    for val in (
+        os.environ.get('FIREBASE_STORAGE_BUCKET', '').strip(),
+        FIREBASE_WEB_CONFIG.get('storageBucket', '').strip(),
+        f'{project_id}.appspot.com',
+        f'{project_id}.firebasestorage.app',
+    ):
+        if val and val not in candidates:
+            candidates.append(val)
+    return candidates
 
 
 def _iter_valid_user_records(all_users):
@@ -858,19 +936,24 @@ try:
     if sa_info:
         project_id = sa_info.get('project_id', 'my-project')
         db_url = _resolve_database_url(project_id)
-        storage_bucket = _resolve_storage_bucket(project_id)
+        storage_candidates = _resolve_storage_bucket_candidates(project_id)
+        storage_bucket = storage_candidates[0] if storage_candidates else ''
         cred = credentials.Certificate(sa_info)
         firebase_admin.initialize_app(cred, {
             'databaseURL': db_url,
             'storageBucket': storage_bucket,
         })
         FIREBASE_ENABLED = True
+        FIREBASE_PROJECT_ID = project_id
         FIREBASE_STORAGE_BUCKET = storage_bucket
+        FIREBASE_STORAGE_BUCKET_CANDIDATES = storage_candidates
         FIREBASE_STORAGE_ENABLED = bool(storage_bucket)
         print(f"✅ Firebase Realtime Database initialized via {source}.")
         print(f"   Database URL: {db_url}")
         if FIREBASE_STORAGE_ENABLED:
             print(f"✅ Firebase Storage enabled with bucket: {FIREBASE_STORAGE_BUCKET}")
+            if len(FIREBASE_STORAGE_BUCKET_CANDIDATES) > 1:
+                print(f"   Storage bucket candidates: {', '.join(FIREBASE_STORAGE_BUCKET_CANDIDATES)}")
         else:
             print("ℹ️  Firebase Storage bucket not configured; uploads will use local storage fallback.")
     else:
@@ -2006,6 +2089,12 @@ def uploaded_media(filename):
 
     return 'File not found', 404
 
+
+@app.route('/upload/<path:filename>')
+def uploaded_media_legacy_alias(filename):
+    """Legacy alias for singular /upload/* paths."""
+    return uploaded_media(filename)
+
 @app.route('/api/packages')
 def get_packages():
     return db_get_all_packages()
@@ -2016,7 +2105,9 @@ def media_storage_status():
     return jsonify({
         'firebase_database_enabled': FIREBASE_ENABLED,
         'firebase_storage_enabled': FIREBASE_STORAGE_ENABLED,
+        'firebase_project_id': FIREBASE_PROJECT_ID,
         'firebase_storage_bucket': FIREBASE_STORAGE_BUCKET,
+        'firebase_storage_bucket_candidates': FIREBASE_STORAGE_BUCKET_CANDIDATES,
         'upload_public_prefix': UPLOAD_PUBLIC_PREFIX,
         'upload_folder': UPLOAD_FOLDER,
         'upload_persistent_dir_env': os.environ.get('UPLOAD_PERSISTENT_DIR', '').strip(),
