@@ -237,6 +237,11 @@ def _firebase_download_url(bucket_name, object_name, token):
     return f'https://firebasestorage.googleapis.com/v0/b/{bucket_name}/o/{encoded_name}?alt=media&token={token}'
 
 
+def _firebase_public_url(bucket_name, object_name):
+    encoded_name = quote(str(object_name or ''), safe='/')
+    return f'https://storage.googleapis.com/{bucket_name}/{encoded_name}'
+
+
 def _iter_storage_bucket_candidates():
     seen = set()
     for name in FIREBASE_STORAGE_BUCKET_CANDIDATES:
@@ -263,25 +268,29 @@ def _promote_storage_bucket(bucket_name):
 
 
 def _upload_to_firebase_storage(content_bytes, object_name, content_type):
-    """Upload bytes to Firebase Storage and return a tokenized public URL."""
+    """Upload bytes to Firebase Storage and return a permanent public URL."""
     if not FIREBASE_STORAGE_ENABLED:
+        return ''
+    if not content_bytes:
+        return ''
+
+    normalized_object = str(object_name or '').replace('\\', '/').strip().lstrip('/')
+    if not normalized_object:
         return ''
 
     last_error = ''
     for bucket_name in _iter_storage_bucket_candidates():
         try:
             bucket = firebase_storage.bucket(name=bucket_name)
-            blob = bucket.blob(object_name)
-            token = uuid.uuid4().hex
-            blob.metadata = {'firebaseStorageDownloadTokens': token}
+            blob = bucket.blob(normalized_object)
             blob.cache_control = 'public, max-age=31536000'
             blob.upload_from_string(content_bytes, content_type=content_type)
-            blob.patch()
+            blob.make_public()
             _promote_storage_bucket(bucket_name)
-            return _firebase_download_url(bucket_name, object_name, token)
+            return blob.public_url or _firebase_public_url(bucket_name, normalized_object)
         except Exception as e:
             last_error = str(e)
-            print(f"⚠️  Firebase Storage upload error for {object_name} in bucket {bucket_name}: {e}")
+            print(f"⚠️  Firebase Storage upload error for {normalized_object} in bucket {bucket_name}: {e}")
 
     if last_error:
         print(f"⚠️  Firebase Storage upload failed for all buckets: {last_error}")
@@ -293,14 +302,25 @@ def _firebase_object_url_if_exists(object_name):
     if not FIREBASE_STORAGE_ENABLED:
         return ''
 
+    normalized_object = str(object_name or '').replace('\\', '/').strip().lstrip('/')
+    if not normalized_object:
+        return ''
+
     for bucket_name in _iter_storage_bucket_candidates():
         try:
             bucket = firebase_storage.bucket(name=bucket_name)
-            blob = bucket.blob(object_name)
+            blob = bucket.blob(normalized_object)
             if not blob.exists():
                 continue
 
             blob.reload()
+            try:
+                blob.make_public()
+                _promote_storage_bucket(bucket_name)
+                return blob.public_url or _firebase_public_url(bucket_name, normalized_object)
+            except Exception:
+                pass
+
             metadata = blob.metadata or {}
             token_field = str(metadata.get('firebaseStorageDownloadTokens', '') or '')
             token = token_field.split(',')[0].strip() if token_field else ''
@@ -312,9 +332,9 @@ def _firebase_object_url_if_exists(object_name):
                 blob.patch()
 
             _promote_storage_bucket(bucket_name)
-            return _firebase_download_url(bucket_name, object_name, token)
+            return _firebase_download_url(bucket_name, normalized_object, token)
         except Exception as e:
-            print(f"⚠️  Firebase Storage lookup error for {object_name} in bucket {bucket_name}: {e}")
+            print(f"⚠️  Firebase Storage lookup error for {normalized_object} in bucket {bucket_name}: {e}")
 
     return ''
 
@@ -342,51 +362,78 @@ def optimize_image(file_obj, max_width=1920, max_height=1080, quality=90):
         file_obj.seek(0)
         return None
 
-def save_uploaded_files(files, allowed_ext):
-    """Save uploaded files and return public URLs (cloud-first, local fallback)."""
+def _sanitize_upload_folder(folder_hint, default_folder='packages'):
+    raw = str(folder_hint or '').strip().replace('\\', '/').strip('/')
+    if not raw:
+        return default_folder
+
+    safe_segments = []
+    for segment in raw.split('/'):
+        seg = re.sub(r'[^a-zA-Z0-9_-]+', '-', segment.strip())
+        if not seg or seg in ('.', '..'):
+            continue
+        safe_segments.append(seg)
+
+    if not safe_segments:
+        return default_folder
+    return '/'.join(safe_segments)
+
+
+def _upload_single_file_to_firebase(file_obj, allowed_ext, folder_prefix='packages'):
+    """Upload one Werkzeug FileStorage object to Firebase using memory-only bytes."""
+    if not file_obj or not file_obj.filename:
+        return None, 'No file selected.'
+    if not allowed_file(file_obj.filename, allowed_ext):
+        return None, 'Invalid file type.'
+
+    ext = file_obj.filename.rsplit('.', 1)[1].lower()
+    content_type = _guess_content_type(file_obj.filename)
+    content_bytes = b''
+    object_ext = ext
+
+    if ext in ALLOWED_IMG_EXT:
+        optimized = optimize_image(file_obj)
+        if optimized:
+            content_bytes = optimized.read()
+            content_type = 'image/jpeg'
+            object_ext = 'jpg'
+        else:
+            try:
+                file_obj.seek(0)
+            except Exception:
+                pass
+            content_bytes = file_obj.read()
+    else:
+        try:
+            file_obj.seek(0)
+        except Exception:
+            pass
+        content_bytes = file_obj.read()
+
+    if not content_bytes:
+        return None, 'Empty file stream.'
+
+    clean_folder = _sanitize_upload_folder(folder_prefix)
+    object_name = f'{clean_folder}/{uuid.uuid4().hex}.{object_ext}'
+    cloud_url = _upload_to_firebase_storage(content_bytes, object_name, content_type)
+    if not cloud_url:
+        return None, 'Upload failed. Firebase Storage may be unavailable.'
+
+    return {
+        'url': cloud_url,
+        'object_name': object_name,
+        'content_type': content_type,
+        'size': len(content_bytes),
+    }, ''
+
+
+def save_uploaded_files(files, allowed_ext, folder_prefix='packages'):
+    """Upload many files in-memory to Firebase and return public URLs."""
     urls = []
     for f in files:
-        if f and f.filename and allowed_file(f.filename, allowed_ext):
-            ext = f.filename.rsplit('.', 1)[1].lower()
-            unique_name = ''
-            content_bytes = b''
-            content_type = _guess_content_type(f.filename)
-
-            # Optimize images for high-quality display.
-            if ext in ALLOWED_IMG_EXT:
-                optimized = optimize_image(f)
-                if optimized:
-                    unique_name = f'{uuid.uuid4().hex}.jpg'
-                    content_bytes = optimized.read()
-                    content_type = 'image/jpeg'
-                else:
-                    unique_name = f'{uuid.uuid4().hex}.{ext}'
-                    try:
-                        f.seek(0)
-                    except Exception:
-                        pass
-                    content_bytes = f.read()
-            else:
-                unique_name = f'{uuid.uuid4().hex}.{ext}'
-                try:
-                    f.seek(0)
-                except Exception:
-                    pass
-                content_bytes = f.read()
-
-            if not content_bytes:
-                continue
-
-            cloud_url = _upload_to_firebase_storage(content_bytes, unique_name, content_type)
-            if cloud_url:
-                urls.append(cloud_url)
-                continue
-
-            # Local fallback (works with Render disk or local dev).
-            save_path = os.path.join(UPLOAD_FOLDER, unique_name)
-            with open(save_path, 'wb') as out:
-                out.write(content_bytes)
-            urls.append(_upload_public_url(unique_name))
+        uploaded, _ = _upload_single_file_to_firebase(f, allowed_ext, folder_prefix=folder_prefix)
+        if uploaded and uploaded.get('url'):
+            urls.append(uploaded['url'])
     return urls
 
 
@@ -2111,6 +2158,40 @@ def media_storage_status():
         'upload_public_prefix': UPLOAD_PUBLIC_PREFIX,
         'upload_folder': UPLOAD_FOLDER,
         'upload_persistent_dir_env': os.environ.get('UPLOAD_PERSISTENT_DIR', '').strip(),
+    })
+
+
+@app.route('/api/upload/image', methods=['POST'])
+def api_upload_image():
+    """Upload a single image file directly from request.files to Firebase Storage."""
+    if _normalize_role(session.get('role')) != 'agency':
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 403
+
+    if not FIREBASE_STORAGE_ENABLED:
+        return jsonify({'success': False, 'error': 'Firebase Storage is not configured.'}), 503
+
+    file_obj = request.files.get('file') or request.files.get('image')
+    if not file_obj or not file_obj.filename:
+        return jsonify({'success': False, 'error': 'No file provided.'}), 400
+
+    if not allowed_file(file_obj.filename, ALLOWED_IMG_EXT):
+        return jsonify({
+            'success': False,
+            'error': 'Invalid file type. Allowed: png, jpg, jpeg, gif, webp.',
+        }), 400
+
+    folder = _sanitize_upload_folder(request.form.get('folder', 'packages'), default_folder='packages')
+    uploaded, err = _upload_single_file_to_firebase(file_obj, ALLOWED_IMG_EXT, folder_prefix=folder)
+    if err:
+        status = 400 if err in ('No file selected.', 'Invalid file type.', 'Empty file stream.') else 502
+        return jsonify({'success': False, 'error': err}), status
+
+    return jsonify({
+        'success': True,
+        'url': uploaded['url'],
+        'object_path': uploaded['object_name'],
+        'content_type': uploaded['content_type'],
+        'size': uploaded['size'],
     })
 
 @app.route('/api/package/<id>')
