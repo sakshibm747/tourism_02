@@ -564,6 +564,29 @@ def _normalize_package_media(package):
     return package
 
 
+def _media_preview_list(values, limit=3):
+    items = _normalize_media_list(values)
+    preview = items[:limit]
+    if len(items) > limit:
+        preview.append(f'...(+{len(items) - limit} more)')
+    return preview
+
+
+def _log_package_media_trace(stage, package_id, agency_id, payload):
+    """Structured logs to trace image/gallery transitions during package edits."""
+    try:
+        serialized = json.dumps(payload, ensure_ascii=True, default=str)
+    except Exception:
+        serialized = str(payload)
+    app.logger.info(
+        'MEDIA_TRACE stage=%s package_id=%s agency_id=%s payload=%s',
+        stage,
+        package_id,
+        agency_id,
+        serialized,
+    )
+
+
 def _extract_upload_object_name(media_url):
     """Extract storage object key from /uploads, /upload, /static/uploads, or /static/upload paths."""
     if not isinstance(media_url, str):
@@ -3657,6 +3680,9 @@ def agency_edit_package(id):
     if package.get('agency_id') != session.get('user_id'):
         flash('You do not have permission to edit this package.', 'error')
         return redirect(url_for('agency_dashboard'))
+
+    before_image = _normalize_media_url(package.get('image', ''))
+    before_gallery = _normalize_media_list(package.get('gallery', []))
     
     title = request.form.get('title', '').strip()
     duration = request.form.get('duration', '').strip()
@@ -3759,19 +3785,41 @@ def agency_edit_package(id):
         update_data['image'] = image_url
         update_data['images'] = [image_url]
     
-    # Handle existing gallery (after removals by user)
+    # Preserve gallery safely: only clear/replace when explicit user input is present.
     existing_gallery_raw = request.form.get('existing_gallery_urls', '').strip()
-    existing_gallery = [u.strip() for u in existing_gallery_raw.splitlines() if u.strip()] if existing_gallery_raw else []
+    gallery_raw = request.form.get('gallery_urls', '').strip()
+    if existing_gallery_raw:
+        existing_gallery = [u.strip() for u in existing_gallery_raw.splitlines() if u.strip()]
+    elif gallery_raw:
+        existing_gallery = [u.strip() for u in gallery_raw.splitlines() if u.strip()]
+    else:
+        existing_gallery = package.get('gallery', [])
     existing_gallery = _normalize_media_list(existing_gallery)
-    
-    # Merge: existing gallery (with removals applied) + newly uploaded files
+
+    # Merge: existing gallery + newly uploaded files.
     new_uploads_only = save_uploaded_files(request.files.getlist('gallery_files'), ALLOWED_IMG_EXT)
     final_gallery = _normalize_media_list(existing_gallery + new_uploads_only)
-    if final_gallery:
-        update_data['gallery'] = final_gallery
-    else:
-        # User removed all images and added none — keep at least the main image
-        update_data['gallery'] = [update_data.get('image', package.get('image', ''))]
+    if not final_gallery:
+        # Keep at least one valid image reference.
+        fallback_image = _normalize_media_url(update_data.get('image', '') or package.get('image', ''))
+        if fallback_image:
+            final_gallery = [fallback_image]
+    update_data['gallery'] = final_gallery
+
+    _log_package_media_trace('pre_update', id, session.get('user_id'), {
+        'before_image': before_image,
+        'before_gallery_count': len(before_gallery),
+        'before_gallery_preview': _media_preview_list(before_gallery),
+        'remove_main_requested': remove_main,
+        'incoming_image_url': image_url,
+        'existing_gallery_raw_present': bool(existing_gallery_raw),
+        'gallery_textarea_present': bool(gallery_raw),
+        'uploaded_gallery_count': len(new_uploads_only),
+        'uploaded_gallery_preview': _media_preview_list(new_uploads_only),
+        'resolved_image': update_data.get('image', before_image),
+        'resolved_gallery_count': len(final_gallery),
+        'resolved_gallery_preview': _media_preview_list(final_gallery),
+    })
     
     if video_urls:
         update_data['videos'] = video_urls
@@ -3795,8 +3843,21 @@ def agency_edit_package(id):
     update_data['carbon_score'] = _calculate_carbon_score(update_data['duration'], update_data['transport_type'])
     
     if not db_update_package(id, update_data):
+        _log_package_media_trace('update_failed', id, session.get('user_id'), {
+            'attempted_image': update_data.get('image', before_image),
+            'attempted_gallery_count': len(update_data.get('gallery', [])),
+            'attempted_gallery_preview': _media_preview_list(update_data.get('gallery', [])),
+        })
         flash('Package update failed in Firebase. Please check DB credentials/rules and try again.', 'error')
         return redirect(url_for('agency_dashboard'))
+
+    persisted = db_get_package(id) or {}
+    persisted_gallery = _normalize_media_list(persisted.get('gallery', []))
+    _log_package_media_trace('post_update', id, session.get('user_id'), {
+        'persisted_image': _normalize_media_url(persisted.get('image', '')),
+        'persisted_gallery_count': len(persisted_gallery),
+        'persisted_gallery_preview': _media_preview_list(persisted_gallery),
+    })
 
     flash(f'Package "{title}" updated successfully!', 'success')
     return redirect(url_for('agency_dashboard'))

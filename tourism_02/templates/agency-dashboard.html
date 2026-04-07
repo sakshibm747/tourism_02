@@ -1273,5 +1273,16 @@
         document.getElementById('edit-existing-gallery').value = window._editGalleryUrls.join('\n');
         document.getElementById('edit-gallery').value = window._editGalleryUrls.join('\n');
     }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        var editForm = document.getElementById('edit-form');
+        if (!editForm) return;
+        editForm.addEventListener('submit', function() {
+            if (!Array.isArray(window._editGalleryUrls)) {
+                window._editGalleryUrls = [];
+            }
+            syncExistingGalleryInput();
+        });
+    });
 </script>
 {% endblock %}
