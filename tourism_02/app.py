@@ -2197,12 +2197,33 @@ def uploaded_media(filename):
     _add_candidate(candidates, safe_name, seen)
     _add_candidate(candidates, unquote(safe_name), seen)
 
-    has_extension = bool(re.search(r'\.[A-Za-z0-9]{2,6}$', safe_name))
-    prefixes = ('packages', 'stories')
+    ext_match = re.search(r'\.([A-Za-z0-9]{2,6})$', safe_name)
+    has_extension = bool(ext_match)
+    current_ext = (ext_match.group(1).lower() if ext_match else '')
+    prefixes = ('packages', 'stories', 'uploads', 'gallery', 'reviews')
 
     if '/' not in safe_name:
         for prefix in prefixes:
             _add_candidate(candidates, f'{prefix}/{safe_name}', seen)
+
+        if has_extension:
+            base = safe_name.rsplit('.', 1)[0]
+            _add_candidate(candidates, base, seen)
+            for prefix in prefixes:
+                _add_candidate(candidates, f'{prefix}/{base}', seen)
+
+            ext_swaps = []
+            if current_ext == 'jpg':
+                ext_swaps.append('jpeg')
+            elif current_ext == 'jpeg':
+                ext_swaps.append('jpg')
+
+            for alt_ext in ext_swaps:
+                alt_name = f'{base}.{alt_ext}'
+                _add_candidate(candidates, alt_name, seen)
+                for prefix in prefixes:
+                    _add_candidate(candidates, f'{prefix}/{alt_name}', seen)
+
         if not has_extension:
             for ext in ('jpg', 'jpeg', 'png', 'webp', 'gif', 'mp4', 'webm', 'mov', 'mp3'):
                 _add_candidate(candidates, f'{safe_name}.{ext}', seen)
@@ -2218,6 +2239,10 @@ def uploaded_media(filename):
         cloud_url = _firebase_object_url_if_exists(candidate)
         if cloud_url:
             return redirect(cloud_url)
+
+    if re.search(r'\.(png|jpe?g|gif|webp)$', safe_name, flags=re.IGNORECASE):
+        app.logger.warning('MEDIA_404_IMAGE_FALLBACK requested=%s tried=%s', safe_name, json.dumps(candidates, ensure_ascii=True))
+        return redirect('https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?auto=format&fit=crop&w=1000&q=80')
 
     app.logger.warning('MEDIA_404 requested=%s tried=%s', safe_name, json.dumps(candidates, ensure_ascii=True))
 
