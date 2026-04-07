@@ -3393,6 +3393,31 @@ def _extract_date(value):
     return None
 
 
+def _slugify_package_id(title, max_len=48):
+    raw = str(title or '').strip().lower()
+    slug = re.sub(r'[^a-z0-9]+', '-', raw).strip('-')
+    if not slug:
+        slug = 'package'
+    return slug[:max_len].strip('-') or 'package'
+
+
+def _generate_unique_package_id(title):
+    base = _slugify_package_id(title, max_len=48)
+    candidate = base
+    if not db_get_package(candidate):
+        return candidate
+
+    # Avoid accidental overwrite when titles are similar.
+    for _ in range(8):
+        suffix = uuid.uuid4().hex[:6]
+        prefix = base[: max(1, 48 - 7)].strip('-') or 'package'
+        candidate = f'{prefix}-{suffix}'
+        if not db_get_package(candidate):
+            return candidate
+
+    return f'package-{uuid.uuid4().hex[:8]}'
+
+
 def _in_date_range(date_value, start_date=None, end_date=None):
     if not start_date and not end_date:
         return True
@@ -3718,8 +3743,8 @@ def agency_add_package():
         flash('Package title and price are required.', 'error')
         return redirect(url_for('agency_dashboard'))
     
-    # Generate a slug-based ID
-    pkg_id = title.lower().replace(' ', '-').replace('&', 'and')[:30]
+    # Generate a collision-safe package ID (prevents accidental overwrite).
+    pkg_id = _generate_unique_package_id(title)
     
     # Default image if none provided
     if not image_url:
