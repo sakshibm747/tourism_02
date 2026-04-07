@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, session, redirect, url_for, flash, jsonify, Response, send_from_directory
+﻿from flask import Flask, render_template, request, session, redirect, url_for, flash, jsonify, Response, send_from_directory
 from config import Config
 import firebase_admin
 from firebase_admin import credentials, db as firebase_db, auth as firebase_auth, storage as firebase_storage
@@ -40,6 +40,12 @@ _CACHE_TTL = {
     'restaurants': 86400, # 24 hours
     'trust_score': 900    # 15 minutes
 }
+_MEDIA_ROUTE_CACHE = {}
+_MEDIA_ROUTE_CACHE_TTL = 900
+_MEDIA_ROUTE_MISS_TTL = 180
+_MEDIA_CACHE_NOT_FOUND = '__NOT_FOUND__'
+_MEDIA_CACHE_IMAGE_FALLBACK = '__IMAGE_FALLBACK__'
+_MEDIA_PLACEHOLDER_URL = 'https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?auto=format&fit=crop&w=1000&q=80'
 
 def cache_get(key):
     entry = _api_cache.get(key)
@@ -55,6 +61,20 @@ def cache_get_stale(key):
     """Return cached data even if expired, used as graceful fallback."""
     entry = _api_cache.get(key)
     return entry['data'] if entry else None
+
+
+def _media_route_cache_get(key):
+    entry = _MEDIA_ROUTE_CACHE.get(key)
+    if not entry:
+        return None
+    if time.time() - entry['ts'] >= entry['ttl']:
+        _MEDIA_ROUTE_CACHE.pop(key, None)
+        return None
+    return entry['value']
+
+
+def _media_route_cache_set(key, value, ttl=_MEDIA_ROUTE_CACHE_TTL):
+    _MEDIA_ROUTE_CACHE[key] = {'value': value, 'ts': time.time(), 'ttl': ttl}
 
 
 def _weather_cache_key(lat, lng):
@@ -169,7 +189,7 @@ def _fetch_weather_with_fallback(lat, lng, forecast_days=7):
         resp.raise_for_status()
         return resp.json(), 'open-meteo', ''
     except Exception as open_meteo_err:
-        print(f"⚠️  Open-Meteo fallback triggered: {open_meteo_err}")
+        print(f"âš ï¸  Open-Meteo fallback triggered: {open_meteo_err}")
 
     try:
         wttr_url = f'https://wttr.in/{lat},{lng}?format=j1'
@@ -209,7 +229,7 @@ STORY_AUDIO_FOLDER = os.path.join(UPLOAD_FOLDER, 'stories')
 os.makedirs(STORY_AUDIO_FOLDER, exist_ok=True)
 
 if os.environ.get('RENDER') and not os.environ.get('UPLOAD_PERSISTENT_DIR', '').strip():
-    print('⚠️  UPLOAD_PERSISTENT_DIR is not set on Render. Local uploads may be ephemeral across restarts.')
+    print('âš ï¸  UPLOAD_PERSISTENT_DIR is not set on Render. Local uploads may be ephemeral across restarts.')
 
 LOCAL_RUNTIME_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runtime_data')
 LOCAL_USERS_FILE = os.path.join(LOCAL_RUNTIME_DIR, 'users.json')
@@ -297,15 +317,15 @@ def _upload_to_firebase_storage(content_bytes, object_name, content_type):
             try:
                 blob.make_public()
             except Exception as acl_err:
-                print(f"⚠️  Firebase make_public skipped for {normalized_object} in bucket {bucket_name}: {acl_err}")
+                print(f"âš ï¸  Firebase make_public skipped for {normalized_object} in bucket {bucket_name}: {acl_err}")
             _promote_storage_bucket(bucket_name)
             return _firebase_download_url(bucket_name, normalized_object, token)
         except Exception as e:
             last_error = str(e)
-            print(f"⚠️  Firebase Storage upload error for {normalized_object} in bucket {bucket_name}: {e}")
+            print(f"âš ï¸  Firebase Storage upload error for {normalized_object} in bucket {bucket_name}: {e}")
 
     if last_error:
-        print(f"⚠️  Firebase Storage upload failed for all buckets: {last_error}")
+        print(f"âš ï¸  Firebase Storage upload failed for all buckets: {last_error}")
     return ''
 
 
@@ -322,10 +342,10 @@ def _firebase_object_url_if_exists(object_name):
         try:
             bucket = firebase_storage.bucket(name=bucket_name)
             blob = bucket.blob(normalized_object)
-            if not blob.exists():
+            if not blob.exists(timeout=1):
                 continue
 
-            blob.reload()
+            blob.reload(timeout=1)
             metadata = blob.metadata or {}
             token_field = str(metadata.get('firebaseStorageDownloadTokens', '') or '')
             token = token_field.split(',')[0].strip() if token_field else ''
@@ -333,17 +353,17 @@ def _firebase_object_url_if_exists(object_name):
                 token = uuid.uuid4().hex
                 metadata['firebaseStorageDownloadTokens'] = token
                 blob.metadata = metadata
-                blob.patch()
+                blob.patch(timeout=1)
 
             try:
                 blob.make_public()
             except Exception as acl_err:
-                print(f"⚠️  Firebase make_public skipped for existing {normalized_object} in bucket {bucket_name}: {acl_err}")
+                print(f"âš ï¸  Firebase make_public skipped for existing {normalized_object} in bucket {bucket_name}: {acl_err}")
 
             _promote_storage_bucket(bucket_name)
             return _firebase_download_url(bucket_name, normalized_object, token)
         except Exception as e:
-            print(f"⚠️  Firebase Storage lookup error for {normalized_object} in bucket {bucket_name}: {e}")
+            print(f"âš ï¸  Firebase Storage lookup error for {normalized_object} in bucket {bucket_name}: {e}")
 
     return ''
 
@@ -773,7 +793,7 @@ def _migrate_package_media_to_cloud(package):
 
     return patch, stats
 
-# --- Firebase Initialization (Realtime Database — free Spark plan) ---
+# --- Firebase Initialization (Realtime Database â€” free Spark plan) ---
 FIREBASE_ENABLED = False
 FIREBASE_STORAGE_ENABLED = False
 FIREBASE_STORAGE_BUCKET = ''
@@ -875,7 +895,7 @@ def _verify_user_password(user_key, user_data, password):
                 firebase_db.reference(f'/users/{user_key}').update(patch)
             _update_local_user(user_key, patch)
         except Exception as e:
-            print(f"⚠️  Legacy password migration warning for {user_key}: {e}")
+            print(f"âš ï¸  Legacy password migration warning for {user_key}: {e}")
         try:
             user_data.update(patch)
         except Exception:
@@ -908,7 +928,7 @@ def _read_local_users():
                     if isinstance(raw, dict):
                         users = {str(k): v for k, v in raw.items() if isinstance(v, dict)}
             except Exception as e:
-                print(f"⚠️  Local users file read error: {e}")
+                print(f"âš ï¸  Local users file read error: {e}")
 
         # One-time seed from in-memory users if present.
         seeded = False
@@ -923,7 +943,7 @@ def _read_local_users():
             try:
                 _write_local_users_nolock(users)
             except Exception as e:
-                print(f"⚠️  Local users seed write error: {e}")
+                print(f"âš ï¸  Local users seed write error: {e}")
 
         return users
 
@@ -938,7 +958,7 @@ def _upsert_local_user(user_id, user_record):
                     if isinstance(raw, dict):
                         users = {str(k): v for k, v in raw.items() if isinstance(v, dict)}
             except Exception as e:
-                print(f"⚠️  Local users preload error: {e}")
+                print(f"âš ï¸  Local users preload error: {e}")
         users[str(user_id)] = user_record
         _write_local_users_nolock(users)
 
@@ -953,7 +973,7 @@ def _update_local_user(user_id, patch):
                     if isinstance(raw, dict):
                         users = {str(k): v for k, v in raw.items() if isinstance(v, dict)}
             except Exception as e:
-                print(f"⚠️  Local users preload error: {e}")
+                print(f"âš ï¸  Local users preload error: {e}")
         obj = users.get(str(user_id), {})
         if isinstance(obj, dict):
             obj.update(patch)
@@ -1013,12 +1033,12 @@ def _touch_last_login(user_key):
             firebase_db.reference(f'/users/{user_key}').update(payload)
             _update_local_user(user_key, payload)
         except Exception as e:
-            print(f"⚠️  Firebase last-login update error: {e}")
+            print(f"âš ï¸  Firebase last-login update error: {e}")
     else:
         try:
             _update_local_user(user_key, payload)
         except Exception as e:
-            print(f"⚠️  Local last-login update error: {e}")
+            print(f"âš ï¸  Local last-login update error: {e}")
 
 
 @app.before_request
@@ -1046,21 +1066,21 @@ try:
         FIREBASE_STORAGE_BUCKET = storage_bucket
         FIREBASE_STORAGE_BUCKET_CANDIDATES = storage_candidates
         FIREBASE_STORAGE_ENABLED = bool(storage_bucket)
-        print(f"✅ Firebase Realtime Database initialized via {source}.")
+        print(f"âœ… Firebase Realtime Database initialized via {source}.")
         print(f"   Database URL: {db_url}")
         if FIREBASE_STORAGE_ENABLED:
-            print(f"✅ Firebase Storage enabled with bucket: {FIREBASE_STORAGE_BUCKET}")
+            print(f"âœ… Firebase Storage enabled with bucket: {FIREBASE_STORAGE_BUCKET}")
             if len(FIREBASE_STORAGE_BUCKET_CANDIDATES) > 1:
                 print(f"   Storage bucket candidates: {', '.join(FIREBASE_STORAGE_BUCKET_CANDIDATES)}")
         else:
-            print("ℹ️  Firebase Storage bucket not configured; uploads will use local storage fallback.")
+            print("â„¹ï¸  Firebase Storage bucket not configured; uploads will use local storage fallback.")
     else:
-        print("ℹ️  Firebase credentials not found. Running in MOCK mode.")
+        print("â„¹ï¸  Firebase credentials not found. Running in MOCK mode.")
         print("   Add FIREBASE_SERVICE_ACCOUNT_JSON on Render to enable realtime DB writes.")
         print("   Add FIREBASE_STORAGE_BUCKET and/or storageBucket config to persist uploads in cloud storage.")
         print(f"   Using local auth store: {LOCAL_USERS_FILE}")
 except Exception as e:
-    print(f"⚠️  Firebase initialization failed: {e}")
+    print(f"âš ï¸  Firebase initialization failed: {e}")
     print("   Running in MOCK mode (in-memory database)")
     print("   Uploads will use local disk fallback unless Firebase initialization succeeds.")
     print(f"   Using local auth store: {LOCAL_USERS_FILE}")
@@ -1306,11 +1326,11 @@ def db_clear_old_data():
         if existing and isinstance(existing, dict):
             # Wipe all packages - fresh start
             ref.delete()
-            print(f"🧹 Cleared all {len(existing)} old packages from Firebase. Fresh start!")
+            print(f"ðŸ§¹ Cleared all {len(existing)} old packages from Firebase. Fresh start!")
         else:
-            print("ℹ️  No packages in Firebase to clean up.")
+            print("â„¹ï¸  No packages in Firebase to clean up.")
     except Exception as e:
-        print(f"⚠️  Cleanup failed: {e}")
+        print(f"âš ï¸  Cleanup failed: {e}")
 
 def db_get_all_packages():
     """Get all packages as a dict of {id: package_data}."""
@@ -1322,7 +1342,7 @@ def db_get_all_packages():
             if not isinstance(data, dict):
                 data = {}
         except Exception as e:
-            print(f"⚠️  Firebase read error: {e}")
+            print(f"âš ï¸  Firebase read error: {e}")
             data = {}
     else:
         data = MOCK_DATABASE['packages']
@@ -1344,7 +1364,7 @@ def db_get_package(pkg_id):
             ref = firebase_db.reference(f'/packages/{pkg_id}')
             data = ref.get()
         except Exception as e:
-            print(f"⚠️  Firebase read error: {e}")
+            print(f"âš ï¸  Firebase read error: {e}")
             data = None
     else:
         data = MOCK_DATABASE['packages'].get(pkg_id)
@@ -1365,7 +1385,7 @@ def db_add_package(pkg_id, pkg_data):
             ref.set(pkg_data)
             return True
         except Exception as e:
-            print(f"⚠️  Firebase write error: {e}")
+            print(f"âš ï¸  Firebase write error: {e}")
             return False
     MOCK_DATABASE['packages'][pkg_id] = pkg_data
     return True
@@ -1378,7 +1398,7 @@ def db_update_package(pkg_id, pkg_data):
             ref.update(pkg_data)
             return True
         except Exception as e:
-            print(f"⚠️  Firebase update error: {e}")
+            print(f"âš ï¸  Firebase update error: {e}")
             return False
     if pkg_id in MOCK_DATABASE['packages']:
         MOCK_DATABASE['packages'][pkg_id].update(pkg_data)
@@ -1392,7 +1412,7 @@ def db_delete_package(pkg_id):
             ref.delete()
             return True
         except Exception as e:
-            print(f"⚠️  Firebase delete error: {e}")
+            print(f"âš ï¸  Firebase delete error: {e}")
             return False
     if pkg_id in MOCK_DATABASE['packages']:
         del MOCK_DATABASE['packages'][pkg_id]
@@ -1416,7 +1436,7 @@ def db_get_packages_by_agency(agency_id):
                 return packages
             return []
         except Exception as e:
-            print(f"⚠️  Firebase query error: {e}")
+            print(f"âš ï¸  Firebase query error: {e}")
     packages = [pkg for pkg in MOCK_DATABASE['packages'].values() if pkg.get('agency_id') == agency_id]
     recent_booking_map = _get_recent_bookings_map()
     for pkg in packages:
@@ -1439,7 +1459,7 @@ def _get_recent_bookings_map():
             if not isinstance(bookings_data, dict):
                 bookings_data = {}
         except Exception as e:
-            print(f"⚠️  Firebase booking social-proof read error: {e}")
+            print(f"âš ï¸  Firebase booking social-proof read error: {e}")
             bookings_data = {}
     else:
         bookings_data = MOCK_DATABASE.get('bookings', {})
@@ -1583,7 +1603,7 @@ def _generate_story_audio_file(pkg_id, story_idx, narration, force=False):
             if cloud_url:
                 return cloud_url
         except Exception as e:
-            print(f"⚠️  Story audio cloud generation error: {e}")
+            print(f"âš ï¸  Story audio cloud generation error: {e}")
 
     if os.path.exists(abs_path) and not force:
         return rel_url
@@ -1596,7 +1616,7 @@ def _generate_story_audio_file(pkg_id, story_idx, narration, force=False):
         tts.save(abs_path)
         return rel_url
     except Exception as e:
-        print(f"⚠️  Story audio generation error: {e}")
+        print(f"âš ï¸  Story audio generation error: {e}")
         return ''
 
 
@@ -1938,13 +1958,13 @@ def _get_users_map():
                     with _LOCAL_USERS_LOCK:
                         _write_local_users_nolock({str(k): v for k, v in users.items() if isinstance(v, dict)})
                 except Exception as mirror_err:
-                    print(f"⚠️  Local users mirror write error: {mirror_err}")
+                    print(f"âš ï¸  Local users mirror write error: {mirror_err}")
                 return users
         except Exception as e:
-            print(f"⚠️  Firebase users query error: {e}")
+            print(f"âš ï¸  Firebase users query error: {e}")
             fallback = _read_local_users()
             if fallback:
-                print("ℹ️  Using local auth fallback due to Firebase read issue.")
+                print("â„¹ï¸  Using local auth fallback due to Firebase read issue.")
                 return fallback
         return {}
     return _read_local_users()
@@ -1971,7 +1991,7 @@ def _save_notification(agency_id, payload):
             firebase_db.reference(f'/notifications/{agency_id}/{notification_id}').set(payload)
             return True
         except Exception as e:
-            print(f"⚠️  Firebase notification write error: {e}")
+            print(f"âš ï¸  Firebase notification write error: {e}")
             return False
     if 'notifications' not in MOCK_DATABASE:
         MOCK_DATABASE['notifications'] = {}
@@ -1989,7 +2009,7 @@ def _get_notifications_for_agency(agency_id, limit=20):
             if data and isinstance(data, dict):
                 notifications = list(data.values())
         except Exception as e:
-            print(f"⚠️  Firebase notification read error: {e}")
+            print(f"âš ï¸  Firebase notification read error: {e}")
     else:
         notifications = list(MOCK_DATABASE.get('notifications', {}).get(agency_id, {}).values())
     notifications.sort(key=lambda n: n.get('created_at_ts', 0), reverse=True)
@@ -2007,7 +2027,7 @@ def _mark_notification_read(agency_id, notification_id):
             firebase_db.reference(f'/notifications/{agency_id}/{notification_id}/is_read').set(True)
             return True
         except Exception as e:
-            print(f"⚠️  Firebase notification update error: {e}")
+            print(f"âš ï¸  Firebase notification update error: {e}")
             return False
     bucket = MOCK_DATABASE.get('notifications', {}).get(agency_id, {})
     if notification_id in bucket:
@@ -2046,7 +2066,7 @@ def _send_email_alert(to_email, subject, body):
             smtp.send_message(msg)
         return True
     except Exception as e:
-        print(f"⚠️  Email alert error: {e}")
+        print(f"âš ï¸  Email alert error: {e}")
         return False
 
 
@@ -2090,7 +2110,7 @@ def _send_whatsapp_alert(to_number, message):
         client.messages.create(from_=sender, body=message, to=recipient)
         return True
     except Exception as e:
-        print(f"⚠️  WhatsApp alert error: {e}")
+        print(f"âš ï¸  WhatsApp alert error: {e}")
         return False
 
 
@@ -2164,7 +2184,7 @@ def _dispatch_booking_alerts(booking):
         )
         _send_whatsapp_alert(whatsapp_recipient, whatsapp_text)
 
-# One-time cleanup already done — disable to protect new packages
+# One-time cleanup already done â€” disable to protect new packages
 # db_clear_old_data()
 
 @app.route('/')
@@ -2178,6 +2198,20 @@ def uploaded_media(filename):
     safe_name = str(filename or '').replace('\\', '/').lstrip('/')
     if not safe_name:
         return 'File not found', 404
+
+    cache_key = f'uploaded_media:{safe_name.lower()}'
+    cached = _media_route_cache_get(cache_key)
+    if cached == _MEDIA_CACHE_IMAGE_FALLBACK:
+        return redirect(_MEDIA_PLACEHOLDER_URL)
+    if cached == _MEDIA_CACHE_NOT_FOUND:
+        return 'File not found', 404
+    if isinstance(cached, str) and cached.startswith('local:'):
+        cached_local = cached[len('local:'):]
+        cached_local_path = os.path.join(UPLOAD_FOLDER, *cached_local.split('/'))
+        if os.path.exists(cached_local_path):
+            return send_from_directory(UPLOAD_FOLDER, cached_local)
+    if isinstance(cached, str) and cached.startswith(('http://', 'https://')):
+        return redirect(cached)
 
     def _add_candidate(candidates, value, seen):
         cand = str(value or '').replace('\\', '/').strip().lstrip('/')
@@ -2201,6 +2235,12 @@ def uploaded_media(filename):
     has_extension = bool(ext_match)
     current_ext = (ext_match.group(1).lower() if ext_match else '')
     prefixes = ('packages', 'stories', 'uploads', 'gallery', 'reviews')
+
+    # Legacy auto-generated hash filenames are often already missing; fail fast.
+    if re.match(r'^[a-f0-9]{24,}\.(png|jpe?g|gif|webp)$', safe_name, flags=re.IGNORECASE):
+        app.logger.warning('MEDIA_404_FAST_FALLBACK requested=%s', safe_name)
+        _media_route_cache_set(cache_key, _MEDIA_CACHE_IMAGE_FALLBACK, ttl=_MEDIA_ROUTE_MISS_TTL)
+        return redirect(_MEDIA_PLACEHOLDER_URL)
 
     if '/' not in safe_name:
         for prefix in prefixes:
@@ -2233,18 +2273,23 @@ def uploaded_media(filename):
     for candidate in candidates:
         local_path = os.path.join(UPLOAD_FOLDER, *candidate.split('/'))
         if os.path.exists(local_path):
+            _media_route_cache_set(cache_key, f'local:{candidate}')
             return send_from_directory(UPLOAD_FOLDER, candidate)
 
-    for candidate in candidates:
+    max_cloud_checks = 2 if ('/' not in safe_name and has_extension) else 4
+    for candidate in candidates[:max_cloud_checks]:
         cloud_url = _firebase_object_url_if_exists(candidate)
         if cloud_url:
+            _media_route_cache_set(cache_key, cloud_url)
             return redirect(cloud_url)
 
     if re.search(r'\.(png|jpe?g|gif|webp)$', safe_name, flags=re.IGNORECASE):
         app.logger.warning('MEDIA_404_IMAGE_FALLBACK requested=%s tried=%s', safe_name, json.dumps(candidates, ensure_ascii=True))
-        return redirect('https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?auto=format&fit=crop&w=1000&q=80')
+        _media_route_cache_set(cache_key, _MEDIA_CACHE_IMAGE_FALLBACK, ttl=_MEDIA_ROUTE_MISS_TTL)
+        return redirect(_MEDIA_PLACEHOLDER_URL)
 
     app.logger.warning('MEDIA_404 requested=%s tried=%s', safe_name, json.dumps(candidates, ensure_ascii=True))
+    _media_route_cache_set(cache_key, _MEDIA_CACHE_NOT_FOUND, ttl=_MEDIA_ROUTE_MISS_TTL)
 
     return 'File not found', 404
 
@@ -2429,7 +2474,7 @@ def get_nearby_restaurants():
         return jsonify(result)
     except Exception as e:
         # Overpass occasionally rate-limits; keep UI functional with empty data.
-        print(f"⚠️  Nearby restaurants fallback: {e}")
+        print(f"âš ï¸  Nearby restaurants fallback: {e}")
         return jsonify({
             'restaurants': [],
             'warning': 'Restaurant data temporarily unavailable. Please try again later.'
@@ -2516,7 +2561,7 @@ def get_local_trust_score():
             elements = (osm_resp.json() or {}).get('elements', [])
         except Exception as osm_err:
             osm_warning = str(osm_err)
-            print(f"⚠️  Trust-score OSM fallback: {osm_warning}")
+            print(f"âš ï¸  Trust-score OSM fallback: {osm_warning}")
 
         hospital_points = []
         attraction_count = 0
@@ -2718,7 +2763,7 @@ def book_package():
         try:
             firebase_db.reference(f'/bookings/{booking_id}').set(booking)
         except Exception as e:
-            print(f"⚠️  Firebase booking write error: {e}")
+            print(f"âš ï¸  Firebase booking write error: {e}")
             flash('Failed to submit booking. Please try again.', 'error')
             return redirect(request.referrer or url_for('index'))
     else:
@@ -2730,7 +2775,7 @@ def book_package():
     try:
         _dispatch_booking_alerts(booking)
     except Exception as e:
-        print(f"⚠️  Booking notification pipeline error: {e}")
+        print(f"âš ï¸  Booking notification pipeline error: {e}")
 
     flash(f'Booking request submitted! Your Booking ID is {booking_id}. The agency will review and approve it shortly.', 'success')
     return redirect(url_for('profile'))
@@ -2765,7 +2810,7 @@ def _get_booking(booking_id):
         try:
             return firebase_db.reference(f'/bookings/{booking_id}').get()
         except Exception as e:
-            print(f"⚠️  Firebase booking read error: {e}")
+            print(f"âš ï¸  Firebase booking read error: {e}")
             return None
     return MOCK_DATABASE.get('bookings', {}).get(booking_id)
 
@@ -2775,7 +2820,7 @@ def _update_booking_status(booking_id, status):
         try:
             firebase_db.reference(f'/bookings/{booking_id}/status').set(status)
         except Exception as e:
-            print(f"⚠️  Firebase booking update error: {e}")
+            print(f"âš ï¸  Firebase booking update error: {e}")
     else:
         if booking_id in MOCK_DATABASE.get('bookings', {}):
             MOCK_DATABASE['bookings'][booking_id]['status'] = status
@@ -2791,7 +2836,7 @@ def _get_bookings_for_agency(agency_id):
             if data and isinstance(data, dict):
                 bookings = [b for b in data.values() if b.get('agency_id') == agency_id]
         except Exception as e:
-            print(f"⚠️  Firebase bookings query error: {e}")
+            print(f"âš ï¸  Firebase bookings query error: {e}")
     else:
         bookings = [b for b in MOCK_DATABASE.get('bookings', {}).values() if b.get('agency_id') == agency_id]
     bookings.sort(key=lambda b: b.get('booked_on', ''), reverse=True)
@@ -2808,7 +2853,7 @@ def _get_all_bookings():
             if data and isinstance(data, dict):
                 bookings = list(data.values())
         except Exception as e:
-            print(f"⚠️  Firebase bookings query error: {e}")
+            print(f"âš ï¸  Firebase bookings query error: {e}")
     else:
         bookings = list(MOCK_DATABASE.get('bookings', {}).values())
     bookings.sort(key=lambda b: b.get('booked_on', ''), reverse=True)
@@ -2825,7 +2870,7 @@ def _get_bookings_for_user(user_id):
             if data and isinstance(data, dict):
                 bookings = [b for b in data.values() if b.get('user_id') == user_id]
         except Exception as e:
-            print(f"⚠️  Firebase bookings query error: {e}")
+            print(f"âš ï¸  Firebase bookings query error: {e}")
     else:
         bookings = [b for b in MOCK_DATABASE.get('bookings', {}).values() if b.get('user_id') == user_id]
     bookings.sort(key=lambda b: b.get('booked_on', ''), reverse=True)
@@ -2920,7 +2965,7 @@ def login():
             try:
                 _persist_user_patch(user_key, {'role': authenticated_role})
             except Exception as e:
-                print(f"⚠️  Role normalization write warning for {user_key}: {e}")
+                print(f"âš ï¸  Role normalization write warning for {user_key}: {e}")
         session['user_id'] = user_key
         session['role'] = authenticated_role
         session['name'] = user_data.get('name', 'User')
@@ -2963,7 +3008,7 @@ def google_auth():
     except Exception as token_err:
         print(f'Token verification failed ({type(token_err).__name__}): {token_err}')
         
-        # Method 2: Fallback — use client-provided UID and verify via Firebase Auth
+        # Method 2: Fallback â€” use client-provided UID and verify via Firebase Auth
         client_uid = data.get('uid', '')
         client_email = _normalize_email(data.get('email', ''))
         if client_uid:
@@ -3015,7 +3060,7 @@ def google_auth():
         try:
             _upsert_local_user(user_key, user_record)
         except Exception as mirror_err:
-            print(f"⚠️  Local users mirror write error: {mirror_err}")
+            print(f"âš ï¸  Local users mirror write error: {mirror_err}")
         
         # Set Flask session
         session['user_id'] = user_key
@@ -3062,7 +3107,7 @@ def forgot_password_request():
     try:
         _persist_user_patch(user_key, patch)
     except Exception as e:
-        print(f"⚠️  OTP persist error: {e}")
+        print(f"âš ï¸  OTP persist error: {e}")
         return jsonify({'error': 'Could not start password reset. Please try again.'}), 500
 
     minutes = max(1, PASSWORD_RESET_OTP_TTL_SEC // 60)
@@ -3153,7 +3198,7 @@ def forgot_password_verify():
     try:
         _persist_user_patch(user_key, patch)
     except Exception as e:
-        print(f"⚠️  Password reset persist error: {e}")
+        print(f"âš ï¸  Password reset persist error: {e}")
         return jsonify({'error': 'Could not reset password. Please try again.'}), 500
 
     session['user_id'] = user_key
@@ -3215,16 +3260,16 @@ def register():
                 try:
                     _upsert_local_user(user_id, user_record)
                 except Exception as mirror_err:
-                    print(f"⚠️  Local users mirror write error: {mirror_err}")
+                    print(f"âš ï¸  Local users mirror write error: {mirror_err}")
             except Exception as e:
-                print(f"⚠️  Firebase write error: {e}")
+                print(f"âš ï¸  Firebase write error: {e}")
                 flash('Registration failed. Please try again.', 'error')
                 return render_template('login.html', show_register=True)
         else:
             try:
                 _upsert_local_user(user_id, user_record)
             except Exception as e:
-                print(f"⚠️  Local users write error: {e}")
+                print(f"âš ï¸  Local users write error: {e}")
                 flash('Registration failed. Please try again.', 'error')
                 return render_template('login.html', show_register=True)
         
@@ -3268,7 +3313,7 @@ def profile():
                 user_email = user_data.get('email', '')
                 user_name = user_data.get('name', user_name)
         except Exception as e:
-            print(f"⚠️  Firebase user read error: {e}")
+            print(f"âš ï¸  Firebase user read error: {e}")
     
     # Get bookings for this user
     bookings = _get_bookings_for_user(user_id)
@@ -3307,7 +3352,7 @@ def agency_dashboard():
         'stats': {
             'total_bookings': len(agency_bookings),
             'pending_bookings': pending_count,
-            'revenue': f'₹{total_revenue:,}',
+            'revenue': f'â‚¹{total_revenue:,}',
             'active_packages': len(agency_packages)
         }
     }
@@ -3951,9 +3996,9 @@ def agency_edit_package(id):
     flash(f'Package "{title}" updated successfully!', 'success')
     return redirect(url_for('agency_dashboard'))
 
-# ═══════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # TRAVEL BLOG / REVIEWS
-# ═══════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def db_get_reviews(pkg_id):
     """Get all reviews for a package."""
@@ -3965,7 +4010,7 @@ def db_get_reviews(pkg_id):
                 return list(data.values())
             return []
         except Exception as e:
-            print(f"⚠️  Firebase review read error: {e}")
+            print(f"âš ï¸  Firebase review read error: {e}")
     return MOCK_DATABASE.get('reviews', {}).get(pkg_id, [])
 
 def db_add_review(pkg_id, review):
@@ -3978,7 +4023,7 @@ def db_add_review(pkg_id, review):
             ref.set(review)
             return True
         except Exception as e:
-            print(f"⚠️  Firebase review write error: {e}")
+            print(f"âš ï¸  Firebase review write error: {e}")
     if 'reviews' not in MOCK_DATABASE:
         MOCK_DATABASE['reviews'] = {}
     if pkg_id not in MOCK_DATABASE['reviews']:
@@ -4002,7 +4047,7 @@ def db_get_all_reviews():
                 return all_reviews
             return []
         except Exception as e:
-            print(f"⚠️  Firebase reviews read error: {e}")
+            print(f"âš ï¸  Firebase reviews read error: {e}")
     all_reviews = []
     for pkg_id, reviews in MOCK_DATABASE.get('reviews', {}).items():
         for r in reviews:
@@ -4012,7 +4057,7 @@ def db_get_all_reviews():
 
 @app.route('/reviews')
 def travel_blog():
-    """Travel blog / reviews page — shows all reviews as travel stories."""
+    """Travel blog / reviews page â€” shows all reviews as travel stories."""
     all_reviews = db_get_all_reviews()
     # Sort by date (newest first)
     all_reviews.sort(key=lambda r: r.get('date', ''), reverse=True)
@@ -4089,3 +4134,4 @@ def api_add_review(pkg_id):
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
+
