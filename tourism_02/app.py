@@ -3651,12 +3651,30 @@ def agency_add_package():
         itinerary = [{'day': 1, 'title': f'Explore {title}', 'desc': description}]
     
     # Handle file uploads for gallery images
-    gallery_files = request.files.getlist('gallery_files')
-    gallery_urls = save_uploaded_files(gallery_files, ALLOWED_IMG_EXT)
+    gallery_files_all = request.files.getlist('gallery_files')
+    gallery_files = [f for f in gallery_files_all if f and f.filename]
+    valid_gallery_files = [f for f in gallery_files if allowed_file(f.filename, ALLOWED_IMG_EXT)]
+    if gallery_files and not valid_gallery_files:
+        flash('Invalid gallery file type. Allowed: png, jpg, jpeg, gif, webp.', 'error')
+        return redirect(url_for('agency_dashboard'))
+
+    gallery_urls = save_uploaded_files(valid_gallery_files, ALLOWED_IMG_EXT)
+    if valid_gallery_files and len(gallery_urls) < len(valid_gallery_files):
+        flash('Gallery image upload failed. Please verify Firebase Storage configuration and try again.', 'error')
+        return redirect(url_for('agency_dashboard'))
     
     # Handle file uploads for videos
-    video_files = request.files.getlist('video_files')
-    video_urls = save_uploaded_files(video_files, ALLOWED_VID_EXT)
+    video_files_all = request.files.getlist('video_files')
+    video_files = [f for f in video_files_all if f and f.filename]
+    valid_video_files = [f for f in video_files if allowed_file(f.filename, ALLOWED_VID_EXT)]
+    if video_files and not valid_video_files:
+        flash('Invalid video file type. Allowed: mp4, webm, mov.', 'error')
+        return redirect(url_for('agency_dashboard'))
+
+    video_urls = save_uploaded_files(valid_video_files, ALLOWED_VID_EXT)
+    if valid_video_files and len(video_urls) < len(valid_video_files):
+        flash('Video upload failed. Please verify Firebase Storage configuration and try again.', 'error')
+        return redirect(url_for('agency_dashboard'))
     
     # Also accept URL inputs as fallback
     gallery_raw = request.form.get('gallery_urls', '').strip()
@@ -3673,10 +3691,15 @@ def agency_add_package():
     
     # Handle main image upload
     main_image_file = request.files.get('main_image_file')
-    if main_image_file and main_image_file.filename and allowed_file(main_image_file.filename, ALLOWED_IMG_EXT):
+    if main_image_file and main_image_file.filename:
+        if not allowed_file(main_image_file.filename, ALLOWED_IMG_EXT):
+            flash('Invalid main image type. Allowed: png, jpg, jpeg, gif, webp.', 'error')
+            return redirect(url_for('agency_dashboard'))
         saved = save_uploaded_files([main_image_file], ALLOWED_IMG_EXT)
-        if saved:
-            image_url = saved[0]
+        if not saved:
+            flash('Main image upload failed. Please verify Firebase Storage configuration and try again.', 'error')
+            return redirect(url_for('agency_dashboard'))
+        image_url = saved[0]
     image_url = _normalize_media_url(image_url)
     
     # Parse ambient sound type
@@ -3842,8 +3865,17 @@ def agency_edit_package(id):
     description = '\n'.join(description_parts) if description_parts else package.get('description', '')
     
     # Handle file uploads for videos
-    video_files = request.files.getlist('video_files')
-    video_urls = save_uploaded_files(video_files, ALLOWED_VID_EXT)
+    video_files_all = request.files.getlist('video_files')
+    video_files = [f for f in video_files_all if f and f.filename]
+    valid_video_files = [f for f in video_files if allowed_file(f.filename, ALLOWED_VID_EXT)]
+    if video_files and not valid_video_files:
+        flash('Invalid video file type. Allowed: mp4, webm, mov.', 'error')
+        return redirect(url_for('agency_dashboard'))
+
+    video_urls = save_uploaded_files(valid_video_files, ALLOWED_VID_EXT)
+    if valid_video_files and len(video_urls) < len(valid_video_files):
+        flash('Video upload failed. Please verify Firebase Storage configuration and try again.', 'error')
+        return redirect(url_for('agency_dashboard'))
     
     # Also accept URL inputs for videos
     video_raw = request.form.get('video_urls', '').strip()
@@ -3857,10 +3889,15 @@ def agency_edit_package(id):
     
     # Handle main image upload
     main_image_file = request.files.get('main_image_file')
-    if main_image_file and main_image_file.filename and allowed_file(main_image_file.filename, ALLOWED_IMG_EXT):
+    if main_image_file and main_image_file.filename:
+        if not allowed_file(main_image_file.filename, ALLOWED_IMG_EXT):
+            flash('Invalid main image type. Allowed: png, jpg, jpeg, gif, webp.', 'error')
+            return redirect(url_for('agency_dashboard'))
         saved = save_uploaded_files([main_image_file], ALLOWED_IMG_EXT)
-        if saved:
-            image_url = saved[0]
+        if not saved:
+            flash('Main image upload failed. Please verify Firebase Storage configuration and try again.', 'error')
+            return redirect(url_for('agency_dashboard'))
+        image_url = saved[0]
     image_url = _normalize_media_url(image_url)
     # Parse ambient sound type
     ambient_type = request.form.get('ambient_sound', '').strip()
@@ -3931,7 +3968,17 @@ def agency_edit_package(id):
     existing_gallery = _normalize_media_list(existing_gallery)
 
     # Merge: existing gallery + newly uploaded files.
-    new_uploads_only = save_uploaded_files(request.files.getlist('gallery_files'), ALLOWED_IMG_EXT)
+    gallery_files_all = request.files.getlist('gallery_files')
+    gallery_files = [f for f in gallery_files_all if f and f.filename]
+    valid_gallery_files = [f for f in gallery_files if allowed_file(f.filename, ALLOWED_IMG_EXT)]
+    if gallery_files and not valid_gallery_files:
+        flash('Invalid gallery file type. Allowed: png, jpg, jpeg, gif, webp.', 'error')
+        return redirect(url_for('agency_dashboard'))
+
+    new_uploads_only = save_uploaded_files(valid_gallery_files, ALLOWED_IMG_EXT)
+    if valid_gallery_files and len(new_uploads_only) < len(valid_gallery_files):
+        flash('Gallery image upload failed. Please verify Firebase Storage configuration and try again.', 'error')
+        return redirect(url_for('agency_dashboard'))
     final_gallery = _normalize_media_list(existing_gallery + new_uploads_only)
     if not final_gallery:
         # Keep at least one valid image reference.
