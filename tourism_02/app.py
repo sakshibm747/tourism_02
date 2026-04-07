@@ -15,7 +15,7 @@ import math
 import mimetypes
 import threading
 import secrets
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 from datetime import datetime, timedelta
 import smtplib
 from email.message import EmailMessage
@@ -468,6 +468,15 @@ def _normalize_media_url(value):
 
     if lowered.startswith(('http://', 'https://', 'data:', 'blob:')):
         return normalized
+    if lowered.startswith('gs://'):
+        # Convert gs://bucket/object into app-routed uploads path.
+        no_scheme = normalized[5:]
+        parts = no_scheme.split('/', 1)
+        object_name = parts[1] if len(parts) > 1 else ''
+        object_name = unquote(object_name).strip().lstrip('/')
+        if object_name:
+            return _upload_public_url(object_name)
+        return ''
     if lowered.startswith('//'):
         return f'https:{normalized}'
     if lowered.startswith('www.'):
@@ -519,7 +528,17 @@ def _normalize_media_url(value):
             return '/' + trimmed.lstrip('/')
         normalized = trimmed
 
+    # Convert encoded Firebase object names like packages%2Fabc.jpg.
+    if '%2f' in lowered and '/' not in normalized:
+        decoded = unquote(normalized).strip().lstrip('/')
+        if '/' in decoded:
+            return _upload_public_url(decoded)
+
     if '/' not in normalized and re.match(r'^[A-Za-z0-9_.-]+\.(png|jpe?g|gif|webp)$', normalized, re.IGNORECASE):
+        return _upload_public_url(normalized)
+
+    # Legacy records may store bare object keys/ids (without folder or extension).
+    if '/' not in normalized and re.match(r'^[A-Za-z0-9_.-]{12,}$', normalized):
         return _upload_public_url(normalized)
 
     if normalized.startswith('/'):
@@ -2157,14 +2176,50 @@ def index():
 def uploaded_media(filename):
     """Serve uploaded media from local disk, then Firebase Storage fallback."""
     safe_name = str(filename or '').replace('\\', '/').lstrip('/')
-    local_path = os.path.join(UPLOAD_FOLDER, *safe_name.split('/'))
+    if not safe_name:
+        return 'File not found', 404
 
-    if os.path.exists(local_path):
-        return send_from_directory(UPLOAD_FOLDER, safe_name)
+    def _add_candidate(candidates, value, seen):
+        cand = str(value or '').replace('\\', '/').strip().lstrip('/')
+        if not cand:
+            return
+        segments = [seg for seg in cand.split('/') if seg]
+        if not segments or any(seg in ('.', '..') for seg in segments):
+            return
+        normalized = '/'.join(segments)
+        if normalized in seen:
+            return
+        seen.add(normalized)
+        candidates.append(normalized)
 
-    cloud_url = _firebase_object_url_if_exists(safe_name)
-    if cloud_url:
-        return redirect(cloud_url)
+    candidates = []
+    seen = set()
+    _add_candidate(candidates, safe_name, seen)
+    _add_candidate(candidates, unquote(safe_name), seen)
+
+    has_extension = bool(re.search(r'\.[A-Za-z0-9]{2,6}$', safe_name))
+    prefixes = ('packages', 'stories')
+
+    if '/' not in safe_name:
+        for prefix in prefixes:
+            _add_candidate(candidates, f'{prefix}/{safe_name}', seen)
+        if not has_extension:
+            for ext in ('jpg', 'jpeg', 'png', 'webp', 'gif', 'mp4', 'webm', 'mov', 'mp3'):
+                _add_candidate(candidates, f'{safe_name}.{ext}', seen)
+                for prefix in prefixes:
+                    _add_candidate(candidates, f'{prefix}/{safe_name}.{ext}', seen)
+
+    for candidate in candidates:
+        local_path = os.path.join(UPLOAD_FOLDER, *candidate.split('/'))
+        if os.path.exists(local_path):
+            return send_from_directory(UPLOAD_FOLDER, candidate)
+
+    for candidate in candidates:
+        cloud_url = _firebase_object_url_if_exists(candidate)
+        if cloud_url:
+            return redirect(cloud_url)
+
+    app.logger.warning('MEDIA_404 requested=%s tried=%s', safe_name, json.dumps(candidates, ensure_ascii=True))
 
     return 'File not found', 404
 
