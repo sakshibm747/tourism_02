@@ -268,7 +268,7 @@ def _promote_storage_bucket(bucket_name):
 
 
 def _upload_to_firebase_storage(content_bytes, object_name, content_type):
-    """Upload bytes to Firebase Storage and return a permanent public URL."""
+    """Upload bytes to Firebase Storage and return a durable download URL."""
     if not FIREBASE_STORAGE_ENABLED:
         return ''
     if not content_bytes:
@@ -283,11 +283,23 @@ def _upload_to_firebase_storage(content_bytes, object_name, content_type):
         try:
             bucket = firebase_storage.bucket(name=bucket_name)
             blob = bucket.blob(normalized_object)
+            existing_metadata = blob.metadata or {}
+            token_field = str(existing_metadata.get('firebaseStorageDownloadTokens', '') or '')
+            token = token_field.split(',')[0].strip() if token_field else ''
+            if not token:
+                token = uuid.uuid4().hex
+
+            metadata = dict(existing_metadata)
+            metadata['firebaseStorageDownloadTokens'] = token
+            blob.metadata = metadata
             blob.cache_control = 'public, max-age=31536000'
             blob.upload_from_string(content_bytes, content_type=content_type)
-            blob.make_public()
+            try:
+                blob.make_public()
+            except Exception as acl_err:
+                print(f"⚠️  Firebase make_public skipped for {normalized_object} in bucket {bucket_name}: {acl_err}")
             _promote_storage_bucket(bucket_name)
-            return blob.public_url or _firebase_public_url(bucket_name, normalized_object)
+            return _firebase_download_url(bucket_name, normalized_object, token)
         except Exception as e:
             last_error = str(e)
             print(f"⚠️  Firebase Storage upload error for {normalized_object} in bucket {bucket_name}: {e}")
@@ -314,22 +326,19 @@ def _firebase_object_url_if_exists(object_name):
                 continue
 
             blob.reload()
-            try:
-                blob.make_public()
-                _promote_storage_bucket(bucket_name)
-                return blob.public_url or _firebase_public_url(bucket_name, normalized_object)
-            except Exception:
-                pass
-
             metadata = blob.metadata or {}
             token_field = str(metadata.get('firebaseStorageDownloadTokens', '') or '')
             token = token_field.split(',')[0].strip() if token_field else ''
-
             if not token:
                 token = uuid.uuid4().hex
                 metadata['firebaseStorageDownloadTokens'] = token
                 blob.metadata = metadata
                 blob.patch()
+
+            try:
+                blob.make_public()
+            except Exception as acl_err:
+                print(f"⚠️  Firebase make_public skipped for existing {normalized_object} in bucket {bucket_name}: {acl_err}")
 
             _promote_storage_bucket(bucket_name)
             return _firebase_download_url(bucket_name, normalized_object, token)
