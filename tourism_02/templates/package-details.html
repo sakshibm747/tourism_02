@@ -813,15 +813,63 @@
     type="application/json">{{ package.ambient_sound | tojson | safe if package.ambient_sound else '{}' }}</script>
 <script>
     // Gallery data
-    const galleryItems = [];
-    document.querySelectorAll('.gallery-thumb').forEach(thumb => {
-        if (thumb.dataset.broken === '1') return;
-        if (!thumb.dataset.src) return;
-        galleryItems.push({
-            type: thumb.dataset.type,
-            src: thumb.dataset.src
+    let galleryItems = [];
+    let currentIndex = 0;
+
+    function visibleThumbs() {
+        return Array.from(document.querySelectorAll('.gallery-thumb')).filter((thumb) => {
+            if (!thumb.dataset.src) return false;
+            if (thumb.dataset.broken === '1') return false;
+            return thumb.style.display !== 'none';
         });
-    });
+    }
+
+    function syncGalleryItemsFromThumbs(resetToFirst = false) {
+        const seen = new Set();
+        const thumbs = visibleThumbs();
+        const items = [];
+
+        thumbs.forEach((thumb) => {
+            const type = String(thumb.dataset.type || 'image');
+            const src = String(thumb.dataset.src || '').trim();
+            if (!src) {
+                thumb.style.display = 'none';
+                return;
+            }
+            const key = `${type}:${src}`;
+            if (seen.has(key)) {
+                thumb.style.display = 'none';
+                thumb.dataset.broken = '1';
+                return;
+            }
+            seen.add(key);
+            items.push({ type, src });
+        });
+
+        // Recompute visible thumbs after duplicate removal and reindex.
+        const finalThumbs = visibleThumbs();
+        finalThumbs.forEach((thumb, idx) => {
+            thumb.dataset.index = String(idx);
+        });
+        galleryItems = items;
+
+        const counter = document.getElementById('counter-text');
+        if (!galleryItems.length) {
+            const mainEl = document.getElementById('gallery-main');
+            if (mainEl) {
+                mainEl.innerHTML = `<img id="gallery-main-img" src="{{ fallback_image }}" alt="Gallery">`;
+            }
+            if (counter) {
+                counter.textContent = '1 / 1';
+            }
+            return;
+        }
+
+        if (resetToFirst || currentIndex >= galleryItems.length) {
+            currentIndex = 0;
+        }
+        updateMainDisplay(currentIndex);
+    }
 
     function extractIframeSrc(raw) {
         if (!raw) return '';
@@ -920,13 +968,32 @@
         });
     }
 
-    let currentIndex = 0;
-    const totalItems = galleryItems.length;
-
     hydrateVideoThumbnails();
 
+    document.querySelectorAll('.gallery-thumb[data-type="image"] img').forEach((img) => {
+        img.addEventListener('error', () => {
+            const thumb = img.closest('.gallery-thumb');
+            if (!thumb) return;
+            thumb.dataset.broken = '1';
+            thumb.style.display = 'none';
+            syncGalleryItemsFromThumbs();
+        });
+        img.addEventListener('load', () => {
+            const thumb = img.closest('.gallery-thumb');
+            if (!thumb) return;
+            if (thumb.dataset.broken !== '1') {
+                thumb.dataset.broken = '0';
+            }
+            syncGalleryItemsFromThumbs();
+        }, { once: true });
+    });
+
     function updateMainDisplay(index) {
+        const totalItems = galleryItems.length;
         if (totalItems === 0) return;
+        if (index < 0 || index >= totalItems) {
+            index = 0;
+        }
         currentIndex = index;
         const item = galleryItems[index];
         const mainEl = document.getElementById('gallery-main');
@@ -941,7 +1008,11 @@
         document.getElementById('counter-text').textContent = `${index + 1} / ${totalItems}`;
 
         // Update active thumb
-        document.querySelectorAll('.gallery-thumb').forEach((t, i) => {
+        const thumbs = visibleThumbs();
+        document.querySelectorAll('.gallery-thumb').forEach((t) => {
+            t.classList.remove('active');
+        });
+        thumbs.forEach((t, i) => {
             t.classList.toggle('active', i === index);
         });
 
@@ -958,13 +1029,14 @@
     }
 
     function selectThumb(el) {
-        if (totalItems === 0) return;
+        if (!galleryItems.length) return;
         const index = parseInt(el.dataset.index);
         if (Number.isNaN(index)) return;
         updateMainDisplay(index);
     }
 
     function galleryNav(dir) {
+        const totalItems = galleryItems.length;
         if (totalItems === 0) return;
         let newIndex = currentIndex + dir;
         if (newIndex < 0) newIndex = totalItems - 1;
@@ -974,6 +1046,7 @@
 
     // Lightbox
     function openLightbox() {
+        const totalItems = galleryItems.length;
         if (totalItems === 0) return;
         const item = galleryItems[currentIndex];
         if (item.type === 'video') return; // don't open lightbox for videos
@@ -991,6 +1064,8 @@
     }
 
     function lightboxNav(dir) {
+        const totalItems = galleryItems.length;
+        if (totalItems === 0) return;
         let newIndex = currentIndex + dir;
         if (newIndex < 0) newIndex = totalItems - 1;
         if (newIndex >= totalItems) newIndex = 0;
@@ -1028,6 +1103,9 @@
     document.getElementById('gallery-lightbox').addEventListener('click', function (e) {
         if (e.target === this) closeLightbox();
     });
+
+    // Initial sync after thumbs are in DOM.
+    syncGalleryItemsFromThumbs(true);
 
 
 

@@ -2288,7 +2288,7 @@ def uploaded_media(filename):
     cache_key = f'uploaded_media:{safe_name.lower()}'
     cached = _media_route_cache_get(cache_key)
     if cached == _MEDIA_CACHE_IMAGE_FALLBACK:
-        return redirect(_MEDIA_PLACEHOLDER_URL)
+        return 'File not found', 404
     if cached == _MEDIA_CACHE_NOT_FOUND:
         return 'File not found', 404
     if isinstance(cached, str) and cached.startswith('local:'):
@@ -2325,8 +2325,8 @@ def uploaded_media(filename):
     # Legacy auto-generated hash filenames are often already missing; fail fast.
     if re.match(r'^[a-f0-9]{24,}\.(png|jpe?g|gif|webp)$', safe_name, flags=re.IGNORECASE):
         app.logger.warning('MEDIA_404_FAST_FALLBACK requested=%s', safe_name)
-        _media_route_cache_set(cache_key, _MEDIA_CACHE_IMAGE_FALLBACK, ttl=_MEDIA_ROUTE_MISS_TTL)
-        return redirect(_MEDIA_PLACEHOLDER_URL)
+        _media_route_cache_set(cache_key, _MEDIA_CACHE_NOT_FOUND, ttl=_MEDIA_ROUTE_MISS_TTL)
+        return 'File not found', 404
 
     if '/' not in safe_name:
         for prefix in prefixes:
@@ -2371,8 +2371,8 @@ def uploaded_media(filename):
 
     if re.search(r'\.(png|jpe?g|gif|webp)$', safe_name, flags=re.IGNORECASE):
         app.logger.warning('MEDIA_404_IMAGE_FALLBACK requested=%s tried=%s', safe_name, json.dumps(candidates, ensure_ascii=True))
-        _media_route_cache_set(cache_key, _MEDIA_CACHE_IMAGE_FALLBACK, ttl=_MEDIA_ROUTE_MISS_TTL)
-        return redirect(_MEDIA_PLACEHOLDER_URL)
+        _media_route_cache_set(cache_key, _MEDIA_CACHE_NOT_FOUND, ttl=_MEDIA_ROUTE_MISS_TTL)
+        return 'File not found', 404
 
     app.logger.warning('MEDIA_404 requested=%s tried=%s', safe_name, json.dumps(candidates, ensure_ascii=True))
     _media_route_cache_set(cache_key, _MEDIA_CACHE_NOT_FOUND, ttl=_MEDIA_ROUTE_MISS_TTL)
