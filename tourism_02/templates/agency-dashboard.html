@@ -488,7 +488,7 @@
             <p
                 style="color: var(--text-light); font-size: 13px; font-weight: 600; text-transform: uppercase; margin-bottom: 5px;">
                 Total Revenue</p>
-            <h3 style="font-size: 28px; font-weight: 800; color: #000;">{{ agency.stats.revenue }}</h3>
+            <h3 style="font-size: 28px; font-weight: 800; color: #000;">&#8377;{{ '{:,}'.format((agency.stats.revenue or 0)|int) }}</h3>
         </div>
         <div class="agency-stat-card"
             style="background: var(--white); padding: 25px; border-radius: var(--border-radius); box-shadow: 0 4px 20px rgba(0,0,0,0.05); border: var(--glass-border); border-left: 4px solid var(--secondary-color);">

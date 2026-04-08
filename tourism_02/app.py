@@ -3479,7 +3479,7 @@ def agency_dashboard():
         'stats': {
             'total_bookings': len(agency_bookings),
             'pending_bookings': pending_count,
-            'revenue': f'â‚¹{total_revenue:,}',
+            'revenue': total_revenue,
             'active_packages': len(agency_packages)
         }
     }
