@@ -5,6 +5,7 @@ from firebase_admin import credentials, db as firebase_db, auth as firebase_auth
 from firebase_config import FIREBASE_WEB_CONFIG
 import os
 import json
+import base64
 import uuid
 import io
 import time
@@ -317,15 +318,25 @@ def _upload_to_firebase_storage(content_bytes, object_name, content_type):
             try:
                 blob.make_public()
             except Exception as acl_err:
-                print(f"âš ï¸  Firebase make_public skipped for {normalized_object} in bucket {bucket_name}: {acl_err}")
+                app.logger.warning(
+                    'Firebase make_public skipped for %s in bucket %s: %s',
+                    normalized_object,
+                    bucket_name,
+                    acl_err,
+                )
             _promote_storage_bucket(bucket_name)
             return _firebase_download_url(bucket_name, normalized_object, token)
         except Exception as e:
             last_error = str(e)
-            print(f"âš ï¸  Firebase Storage upload error for {normalized_object} in bucket {bucket_name}: {e}")
+            app.logger.warning(
+                'Firebase Storage upload error for %s in bucket %s: %s',
+                normalized_object,
+                bucket_name,
+                e,
+            )
 
     if last_error:
-        print(f"âš ï¸  Firebase Storage upload failed for all buckets: {last_error}")
+        app.logger.warning('Firebase Storage upload failed for all buckets: %s', last_error)
     return ''
 
 
@@ -358,12 +369,22 @@ def _firebase_object_url_if_exists(object_name):
             try:
                 blob.make_public()
             except Exception as acl_err:
-                print(f"âš ï¸  Firebase make_public skipped for existing {normalized_object} in bucket {bucket_name}: {acl_err}")
+                app.logger.warning(
+                    'Firebase make_public skipped for existing %s in bucket %s: %s',
+                    normalized_object,
+                    bucket_name,
+                    acl_err,
+                )
 
             _promote_storage_bucket(bucket_name)
             return _firebase_download_url(bucket_name, normalized_object, token)
         except Exception as e:
-            print(f"âš ï¸  Firebase Storage lookup error for {normalized_object} in bucket {bucket_name}: {e}")
+            app.logger.warning(
+                'Firebase Storage lookup error for %s in bucket %s: %s',
+                normalized_object,
+                bucket_name,
+                e,
+            )
 
     return ''
 
@@ -445,15 +466,51 @@ def _upload_single_file_to_firebase(file_obj, allowed_ext, folder_prefix='packag
     clean_folder = _sanitize_upload_folder(folder_prefix)
     object_name = f'{clean_folder}/{uuid.uuid4().hex}.{object_ext}'
     cloud_url = _upload_to_firebase_storage(content_bytes, object_name, content_type)
-    if not cloud_url:
-        return None, 'Upload failed. Firebase Storage may be unavailable.'
+    if cloud_url:
+        return {
+            'url': cloud_url,
+            'object_name': object_name,
+            'content_type': content_type,
+            'size': len(content_bytes),
+        }, ''
 
-    return {
-        'url': cloud_url,
-        'object_name': object_name,
-        'content_type': content_type,
+    # No-bucket fallback: persist images in Realtime DB and serve via /media/db/<id>.
+    db_url, media_id = _save_media_to_realtime_db(content_bytes, content_type, folder_prefix=clean_folder)
+    if db_url:
+        return {
+            'url': db_url,
+            'object_name': f'db:{media_id}',
+            'content_type': content_type,
+            'size': len(content_bytes),
+        }, ''
+
+    return None, 'Upload failed. Firebase Storage and Realtime DB media fallback are unavailable.'
+
+
+def _save_media_to_realtime_db(content_bytes, content_type, folder_prefix='packages'):
+    """Persist media bytes in Realtime DB as base64 and return internal media URL."""
+    if not FIREBASE_ENABLED:
+        return '', ''
+    if not content_bytes:
+        return '', ''
+
+    media_folder = _sanitize_upload_folder(folder_prefix)
+    media_id = f'{media_folder}_{uuid.uuid4().hex}'
+    payload = {
+        'encoding': 'base64',
+        'content_type': str(content_type or 'application/octet-stream'),
+        'bytes_b64': base64.b64encode(content_bytes).decode('ascii'),
         'size': len(content_bytes),
-    }, ''
+        'created_at': int(time.time()),
+        'folder': media_folder,
+    }
+
+    try:
+        firebase_db.reference(f'/media_assets/{media_id}').set(payload)
+        return f'/media/db/{media_id}', media_id
+    except Exception as e:
+        app.logger.warning('Realtime DB media fallback write failed for %s: %s', media_id, e)
+        return '', ''
 
 
 def save_uploaded_files(files, allowed_ext, folder_prefix='packages'):
@@ -832,13 +889,39 @@ def _resolve_storage_bucket_candidates(project_id):
     candidates = []
     for val in (
         os.environ.get('FIREBASE_STORAGE_BUCKET', '').strip(),
-        FIREBASE_WEB_CONFIG.get('storageBucket', '').strip(),
         f'{project_id}.appspot.com',
+        FIREBASE_WEB_CONFIG.get('storageBucket', '').strip(),
         f'{project_id}.firebasestorage.app',
     ):
         if val and val not in candidates:
             candidates.append(val)
     return candidates
+
+
+def _find_existing_storage_bucket(sa_info, candidates):
+    """Return first existing GCS bucket from candidate list, else empty string."""
+    if not isinstance(sa_info, dict) or not candidates:
+        return ''
+
+    try:
+        from google.cloud import storage as gcs_storage
+        from google.oauth2 import service_account as google_service_account
+
+        creds = google_service_account.Credentials.from_service_account_info(sa_info)
+        client = gcs_storage.Client(project=sa_info.get('project_id'), credentials=creds)
+        for name in candidates:
+            bucket_name = str(name or '').strip()
+            if not bucket_name:
+                continue
+            try:
+                if client.lookup_bucket(bucket_name) is not None:
+                    return bucket_name
+            except Exception as bucket_err:
+                app.logger.warning('Storage bucket lookup failed for %s: %s', bucket_name, bucket_err)
+    except Exception as err:
+        app.logger.warning('Storage bucket lookup setup failed: %s', err)
+
+    return ''
 
 
 def _iter_valid_user_records(all_users):
@@ -1055,25 +1138,28 @@ try:
         project_id = sa_info.get('project_id', 'my-project')
         db_url = _resolve_database_url(project_id)
         storage_candidates = _resolve_storage_bucket_candidates(project_id)
-        storage_bucket = storage_candidates[0] if storage_candidates else ''
+        storage_bucket = _find_existing_storage_bucket(sa_info, storage_candidates)
         cred = credentials.Certificate(sa_info)
-        firebase_admin.initialize_app(cred, {
-            'databaseURL': db_url,
-            'storageBucket': storage_bucket,
-        })
+        init_options = {'databaseURL': db_url}
+        if storage_bucket:
+            init_options['storageBucket'] = storage_bucket
+        firebase_admin.initialize_app(cred, init_options)
         FIREBASE_ENABLED = True
         FIREBASE_PROJECT_ID = project_id
         FIREBASE_STORAGE_BUCKET = storage_bucket
-        FIREBASE_STORAGE_BUCKET_CANDIDATES = storage_candidates
+        FIREBASE_STORAGE_BUCKET_CANDIDATES = [storage_bucket] + [b for b in storage_candidates if b != storage_bucket] if storage_bucket else storage_candidates
         FIREBASE_STORAGE_ENABLED = bool(storage_bucket)
-        print(f"âœ… Firebase Realtime Database initialized via {source}.")
-        print(f"   Database URL: {db_url}")
+        print(f"Firebase Realtime Database initialized via {source}.")
+        print(f"Database URL: {db_url}")
         if FIREBASE_STORAGE_ENABLED:
-            print(f"âœ… Firebase Storage enabled with bucket: {FIREBASE_STORAGE_BUCKET}")
+            print(f"Firebase Storage enabled with bucket: {FIREBASE_STORAGE_BUCKET}")
             if len(FIREBASE_STORAGE_BUCKET_CANDIDATES) > 1:
-                print(f"   Storage bucket candidates: {', '.join(FIREBASE_STORAGE_BUCKET_CANDIDATES)}")
+                print(f"Storage bucket candidates: {', '.join(FIREBASE_STORAGE_BUCKET_CANDIDATES)}")
         else:
-            print("â„¹ï¸  Firebase Storage bucket not configured; uploads will use local storage fallback.")
+            print('Firebase Storage is not enabled because no existing bucket was found for this project.')
+            if storage_candidates:
+                print(f"Checked storage bucket candidates: {', '.join(storage_candidates)}")
+            print('Using Realtime DB media fallback for image uploads (no bucket required).')
     else:
         print("â„¹ï¸  Firebase credentials not found. Running in MOCK mode.")
         print("   Add FIREBASE_SERVICE_ACCOUNT_JSON on Render to enable realtime DB writes.")
@@ -2299,6 +2385,41 @@ def uploaded_media_legacy_alias(filename):
     """Legacy alias for singular /upload/* paths."""
     return uploaded_media(filename)
 
+
+@app.route('/media/db/<media_id>')
+def media_from_realtime_db(media_id):
+    """Serve media stored in Firebase Realtime DB fallback storage."""
+    safe_id = re.sub(r'[^a-zA-Z0-9_-]+', '', str(media_id or '').strip())
+    if not safe_id or safe_id != str(media_id or '').strip():
+        return 'File not found', 404
+    if not FIREBASE_ENABLED:
+        return 'File not found', 404
+
+    try:
+        payload = firebase_db.reference(f'/media_assets/{safe_id}').get() or {}
+    except Exception as e:
+        app.logger.warning('Realtime DB media read failed for %s: %s', safe_id, e)
+        return 'File not found', 404
+
+    if not isinstance(payload, dict):
+        return 'File not found', 404
+
+    b64_data = str(payload.get('bytes_b64', '') or '')
+    if not b64_data:
+        return 'File not found', 404
+
+    try:
+        binary = base64.b64decode(b64_data)
+    except Exception:
+        return 'File not found', 404
+
+    content_type = str(payload.get('content_type', '') or 'application/octet-stream')
+    return Response(
+        binary,
+        mimetype=content_type,
+        headers={'Cache-Control': 'public, max-age=31536000, immutable'},
+    )
+
 @app.route('/api/packages')
 def get_packages():
     return db_get_all_packages()
@@ -2306,9 +2427,17 @@ def get_packages():
 
 @app.route('/api/media-storage-status')
 def media_storage_status():
+    media_mode = 'none'
+    if FIREBASE_STORAGE_ENABLED:
+        media_mode = 'firebase-storage'
+    elif FIREBASE_ENABLED:
+        media_mode = 'realtime-db-fallback'
+
     return jsonify({
         'firebase_database_enabled': FIREBASE_ENABLED,
         'firebase_storage_enabled': FIREBASE_STORAGE_ENABLED,
+        'realtime_db_media_fallback_enabled': FIREBASE_ENABLED,
+        'media_mode': media_mode,
         'firebase_project_id': FIREBASE_PROJECT_ID,
         'firebase_storage_bucket': FIREBASE_STORAGE_BUCKET,
         'firebase_storage_bucket_candidates': FIREBASE_STORAGE_BUCKET_CANDIDATES,
@@ -2320,12 +2449,9 @@ def media_storage_status():
 
 @app.route('/api/upload/image', methods=['POST'])
 def api_upload_image():
-    """Upload a single image file directly from request.files to Firebase Storage."""
+    """Upload one image to Firebase Storage or Realtime DB fallback."""
     if _normalize_role(session.get('role')) != 'agency':
         return jsonify({'success': False, 'error': 'Unauthorized'}), 403
-
-    if not FIREBASE_STORAGE_ENABLED:
-        return jsonify({'success': False, 'error': 'Firebase Storage is not configured.'}), 503
 
     file_obj = request.files.get('file') or request.files.get('image')
     if not file_obj or not file_obj.filename:
@@ -2349,6 +2475,7 @@ def api_upload_image():
         'object_path': uploaded['object_name'],
         'content_type': uploaded['content_type'],
         'size': uploaded['size'],
+        'media_mode': 'firebase-storage' if FIREBASE_STORAGE_ENABLED else ('realtime-db-fallback' if FIREBASE_ENABLED else 'none'),
     })
 
 @app.route('/api/package/<id>')
